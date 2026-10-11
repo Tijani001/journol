@@ -20,9 +20,10 @@ automatically.
 3. Create or select a Supabase PostgreSQL project. Use its server-only pooled
    PostgreSQL connection string; do not use the Supabase browser client or put
    the connection string in `NEXT_PUBLIC_*` configuration.
-4. Choose a shared Redis REST-compatible rate-limit provider and obtain its
-   endpoint and server token. This is required for production: Journol fails
-   closed if it is absent.
+4. Use the Upstash Redis HTTPS REST endpoint and its **Standard** REST token.
+   This is required for production: Journol fails closed if it is absent. Do
+   not use Upstash's Read Only token because the limiter increments and expires
+   keys.
 5. Create a restricted OpenAI project key and set a low project spend alert or
    hard limit before inviting users.
 
@@ -41,8 +42,8 @@ Clerk, database, rate-limit, and OpenAI environments.
 | `DATABASE_SSL_CA_CERT` | Optional Supabase database CA PEM when the runtime does not already trust its chain; use `\n` for line breaks |
 | `OPENAI_API_KEY` | Server-only OpenAI project key |
 | `JOURNOL_REQUIRE_SHARED_RATE_LIMIT` | Set to `true` |
-| `JOURNOL_RATE_LIMIT_REDIS_URL` | Server-only shared limiter endpoint |
-| `JOURNOL_RATE_LIMIT_REDIS_TOKEN` | Server-only shared limiter credential |
+| `JOURNOL_RATE_LIMIT_REDIS_URL` | Upstash REST URL from Connect → REST; server-only |
+| `JOURNOL_RATE_LIMIT_REDIS_TOKEN` | Upstash Standard REST token; server-only |
 | `JOURNOL_TRUST_PROXY` | Set to `true` only for the configured Vercel deployment |
 
 Do not set `JOURNOL_DEV_USER_ID` in Vercel. Do not expose any server-only

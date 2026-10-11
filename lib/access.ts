@@ -3,6 +3,7 @@ import { apiError } from "@/lib/api";
 
 type RateLimitResult = { allowed: boolean; retryAfterSeconds: number };
 type Entry = { count: number; resetAt: number; active: number };
+type UpstashPipelineEntry = { result?: unknown; error?: unknown };
 
 const memoryStore = new Map<string, Entry>();
 
@@ -52,24 +53,66 @@ export function requireProtectedAccess(request: Request) {
   return { subject: subjectFromRequest(request) };
 }
 
-async function sharedLimit(key: string, limit: number, windowSeconds: number): Promise<RateLimitResult | null> {
-  const url = process.env.JOURNOL_RATE_LIMIT_REDIS_URL;
+function sharedLimiterConfiguration(): { url: string; token: string } | null {
+  const configuredUrl = process.env.JOURNOL_RATE_LIMIT_REDIS_URL?.trim();
   const token = process.env.JOURNOL_RATE_LIMIT_REDIS_TOKEN;
-  if (!url || !token) return null;
+  if (!configuredUrl || !token) return null;
 
-  const response = await fetch(`${url.replace(/\/$/, "")}/pipeline`, {
+  let url: URL;
+  try {
+    url = new URL(configuredUrl);
+  } catch {
+    throw new Error("RATE_LIMIT_STORE_INVALID_CONFIGURATION");
+  }
+  if (url.protocol !== "https:") throw new Error("RATE_LIMIT_STORE_INVALID_CONFIGURATION");
+
+  return { url: url.toString().replace(/\/$/, ""), token };
+}
+
+function upstashPipelineCount(result: unknown): number {
+  if (!Array.isArray(result) || result.length < 2) {
+    throw new Error("RATE_LIMIT_STORE_INVALID_RESPONSE");
+  }
+
+  const [increment, expiry] = result;
+  if (
+    typeof increment !== "object" || increment === null || Array.isArray(increment) ||
+    typeof expiry !== "object" || expiry === null || Array.isArray(expiry)
+  ) {
+    throw new Error("RATE_LIMIT_STORE_INVALID_RESPONSE");
+  }
+
+  const incrementEntry = increment as UpstashPipelineEntry;
+  const expiryEntry = expiry as UpstashPipelineEntry;
+  if (typeof incrementEntry.error === "string" || typeof expiryEntry.error === "string") {
+    throw new Error("RATE_LIMIT_STORE_INVALID_RESPONSE");
+  }
+  if (typeof incrementEntry.result !== "number" || !Number.isSafeInteger(incrementEntry.result)) {
+    throw new Error("RATE_LIMIT_STORE_INVALID_RESPONSE");
+  }
+  return incrementEntry.result;
+}
+
+async function sharedLimit(key: string, limit: number, windowSeconds: number): Promise<RateLimitResult | null> {
+  const configuration = sharedLimiterConfiguration();
+  if (!configuration) return null;
+
+  const response = await fetch(`${configuration.url}/pipeline`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify([["INCR", key], ["EXPIRE", key, String(windowSeconds)]]),
+    headers: { Authorization: `Bearer ${configuration.token}`, "Content-Type": "application/json" },
+    // Upstash pipelines return [{ result }, { result }]. Expire only when the
+    // key is new, so steady traffic cannot indefinitely extend the window.
+    body: JSON.stringify([["INCR", key], ["EXPIRE", key, windowSeconds, "NX"]]),
     signal: AbortSignal.timeout(2_000),
   });
   if (!response.ok) throw new Error("RATE_LIMIT_STORE_UNAVAILABLE");
   const result: unknown = await response.json();
-  if (!Array.isArray(result) || !Array.isArray(result[0]) || typeof result[0][0] !== "number") {
-    throw new Error("RATE_LIMIT_STORE_INVALID_RESPONSE");
-  }
-  const count = result[0][0];
+  const count = upstashPipelineCount(result);
   return { allowed: count <= limit, retryAfterSeconds: count <= limit ? 0 : windowSeconds };
+}
+
+export function resetRateLimitStateForTesting() {
+  memoryStore.clear();
 }
 
 export async function limitRequest(
