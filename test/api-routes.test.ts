@@ -81,6 +81,8 @@ describe("AI route input guards", () => {
 
 
 describe("article route validation", () => {
+  // Loading the server-side DOM implementation can take longer when Vitest
+  // starts this route alongside the other integration-style route tests.
   it("rejects malformed and oversized requests before retrieval", async () => {
     const { POST } = await import("@/app/api/article/route");
     const malformed = await POST(new Request("http://test", { method: "POST", body: "{" }));
@@ -88,5 +90,5 @@ describe("article route validation", () => {
     if (!malformed || !oversized) throw new Error("Route returned no response");
     expect(malformed.status).toBe(400);
     expect(oversized.status).toBe(413);
-  });
+  }, 15_000);
 });

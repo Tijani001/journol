@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { readApiResponse } from "@/lib/client/api";
 import { AuthControls } from "@/app/auth-controls";
 import { contextualSuggestions, filterArticles } from "@/lib/news-discovery";
+import { countActiveFilters, nextFilterPopoverState, toggleFilterSelection } from "@/lib/editorial-radar-filters";
 import { normalizeStoryUrl } from "@/lib/story-url";
 type NewsArticle = {
   id: string;
@@ -359,7 +360,9 @@ const [newsError, setNewsError] = useState("");
   const [activePlanInvestigationId, setActivePlanInvestigationId] = useState<string | null>(null);
   const requestedView = useBrowserSearchParam("view");
   const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
-  const [selectedLocations, setSelectedLocations] = useState<string[]>([]);
+  const [selectedContinents, setSelectedContinents] = useState<string[]>([]);
+  const [selectedCountries, setSelectedCountries] = useState<string[]>([]);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [savedInvestigations, setSavedInvestigations] = useState<Array<Record<string, unknown>> | null>(null);
   const [investigationSaved, setInvestigationSaved] = useState(false);
   const [savingInvestigation, setSavingInvestigation] = useState(false);
@@ -369,6 +372,7 @@ const [newsError, setNewsError] = useState("");
   const savedStoryListRequestId = useRef(0);
   const storySaveRequests = useRef(new Set<string>());
   const planOpenRequestId = useRef(0);
+  const filtersPopoverRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
 async function loadNews() {
@@ -389,6 +393,25 @@ const response = await fetch("/api/news");
 loadNews();
 
 }, []);
+  useEffect(() => {
+    if (!filtersOpen) return;
+
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!filtersPopoverRef.current?.contains(event.target as Node)) {
+        setFiltersOpen((open) => nextFilterPopoverState(open, "outside-pointer"));
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFiltersOpen((open) => nextFilterPopoverState(open, "escape"));
+    };
+
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [filtersOpen]);
   const [activeNav, setActiveNav] = useState("Discover");
   const showingSavedInvestigations = activeNav === "Saved investigations" || requestedView === "saved";
   const [savedStories, setSavedStories] = useState<SavedStoryRecord[] | null>(null);
@@ -727,6 +750,7 @@ loadNews();
     }
   };
 const [showLeadDetails, setShowLeadDetails] = useState(false);
+const selectedLocations = [...selectedContinents, ...selectedCountries];
 const filteredStories = discoverLeads(filterArticles(newsArticles, {
   query: search,
   topics: selectedTopics,
@@ -734,7 +758,21 @@ const filteredStories = discoverLeads(filterArticles(newsArticles, {
 }));
   const suggestedFilters = contextualSuggestions(newsArticles, search);
   const suggestedTopics = [...new Set([...selectedTopics, ...suggestedFilters.topics])];
-  const suggestedLocations = [...new Set([...selectedLocations, ...suggestedFilters.locations])];
+  const suggestedContinents = [...new Set([...selectedContinents, ...suggestedFilters.continents])];
+  const suggestedCountries = [...new Set([...selectedCountries, ...suggestedFilters.countries])];
+  const activeFilterCount = countActiveFilters(selectedTopics, selectedContinents, selectedCountries);
+  const isDiscoveryView = !showingSavedInvestigations && activeNav !== "Saved stories";
+  const clearDiscoveryFilters = () => {
+    setSelectedTopics([]);
+    setSelectedContinents([]);
+    setSelectedCountries([]);
+  };
+  const toggleFilterValue = (
+    value: string,
+    setter: (updater: (values: string[]) => string[]) => void,
+  ) => {
+    setter((values) => toggleFilterSelection(values, value));
+  };
   const savedInvestigationCount = savedInvestigations?.length ?? 0;
   const savedStoryCount = savedStories?.length ?? 0;
   const savedStoriesByUrl = new Map((savedStories ?? []).map((story) => [story.canonicalUrl, story]));
@@ -1074,30 +1112,79 @@ style={{
             {showAll ? "Show less" : "View all discoveries"} <span>→</span>
           </button>
         </div>
-        <div className="filter-row">
-          <div className="search-box">
-            <span>⌕</span>
-            <input
-              aria-label="Search story opportunities"
-              placeholder="Search leads, topics or locations..."
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
-            <kbd>⌘ F</kbd>
+        {isDiscoveryView && <>
+          <div className="filter-row" ref={filtersPopoverRef}>
+            <div className="search-box">
+              <span>⌕</span>
+              <input
+                aria-label="Search story opportunities"
+                placeholder="Search leads, topics or locations..."
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+              <kbd>⌘ F</kbd>
+            </div>
+            <button
+              type="button"
+              className="filter-button"
+              aria-expanded={filtersOpen}
+              aria-controls="editorial-radar-filters"
+              onClick={() => setFiltersOpen((open) => nextFilterPopoverState(open, "toggle"))}
+            >
+              <span aria-hidden="true">⚙</span>
+              Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
+            </button>
+            {filtersOpen && <div
+              id="editorial-radar-filters"
+              className="filters-popover"
+              role="dialog"
+              aria-label="Editorial Radar filters"
+            >
+              <div className="filters-popover-heading">
+                <span>Filters</span>
+                <button type="button" className="text-button" onClick={clearDiscoveryFilters} disabled={activeFilterCount === 0}>Clear all</button>
+              </div>
+              <section className="filter-section" aria-labelledby="topic-filter-heading">
+                <h3 id="topic-filter-heading">Topics</h3>
+                {suggestedTopics.length > 0 ? <div className="filter-options">
+                  {suggestedTopics.map((topic) => <label className="filter-check" key={topic}>
+                    <input type="checkbox" checked={selectedTopics.includes(topic)} onChange={() => toggleFilterValue(topic, setSelectedTopics)} />
+                    <span>{topic}</span>
+                  </label>)}
+                </div> : <p className="suggestion-empty">No topic signals in the current results.</p>}
+              </section>
+              <section className="filter-section" aria-labelledby="location-filter-heading">
+                <h3 id="location-filter-heading">Locations</h3>
+                <div className="location-filter-group">
+                  <h4>Continents</h4>
+                  {suggestedContinents.length > 0 ? <div className="filter-options">
+                    {suggestedContinents.map((continent) => <label className="filter-check" key={continent}>
+                      <input type="checkbox" checked={selectedContinents.includes(continent)} onChange={() => toggleFilterValue(continent, setSelectedContinents)} />
+                      <span>{continent}</span>
+                    </label>)}
+                  </div> : <p className="suggestion-empty">No continent mentions in the current results.</p>}
+                </div>
+                <div className="location-filter-group">
+                  <h4>Countries</h4>
+                  {suggestedCountries.length > 0 ? <div className="filter-options">
+                    {suggestedCountries.map((country) => <label className="filter-check" key={country}>
+                      <input type="checkbox" checked={selectedCountries.includes(country)} onChange={() => toggleFilterValue(country, setSelectedCountries)} />
+                      <span>{country}</span>
+                    </label>)}
+                  </div> : <p className="suggestion-empty">No country mentions in the current results.</p>}
+                </div>
+              </section>
+              <p className="filter-help">Topics and locations are discovery signals from the current feed. Location mentions do not verify where an event occurred.</p>
+            </div>}
           </div>
-          {(selectedTopics.length > 0 || selectedLocations.length > 0) && <button className="text-button" onClick={() => { setSelectedTopics([]); setSelectedLocations([]); }}>Clear filters</button>}
-        </div>
-        <div className="contextual-filters" aria-label="Contextual story filters">
-          <div className="suggestion-group">
-            <span className="suggestion-label">Topics in these results</span>
-            {suggestedTopics.length > 0 ? <div className="suggestion-chips">{suggestedTopics.map((topic) => <button key={topic} className={selectedTopics.includes(topic) ? "filter-option selected" : "filter-option"} onClick={() => setSelectedTopics((items) => items.includes(topic) ? items.filter((item) => item !== topic) : [...items, topic])}>{topic}</button>)}</div> : <span className="suggestion-empty">No topic signals in the available results.</span>}
-          </div>
-          <div className="suggestion-group">
-            <span className="suggestion-label">Locations mentioned</span>
-            {suggestedLocations.length > 0 ? <div className="suggestion-chips">{suggestedLocations.map((location) => <button key={location} className={selectedLocations.includes(location) ? "filter-option selected" : "filter-option"} onClick={() => setSelectedLocations((items) => items.includes(location) ? items.filter((item) => item !== location) : [...items, location])}>{location}</button>)}</div> : <span className="suggestion-empty">No reliable location mentions in the available results.</span>}
-          </div>
-        </div>
-        <p className="filter-help">Suggestions are drawn from the current feed and search results. Topic and location labels are keyword-based discovery aids; they do not verify an event location.</p>
+          {activeFilterCount > 0 && <div className="active-filter-chips" aria-label="Active filters">
+            {[...selectedTopics.map((value) => ({ value, type: "topic", setter: setSelectedTopics })), ...selectedContinents.map((value) => ({ value, type: "continent", setter: setSelectedContinents })), ...selectedCountries.map((value) => ({ value, type: "country", setter: setSelectedCountries }))].map(({ value, type, setter }) => <button type="button" className="active-filter-chip" key={`${type}-${value}`} onClick={() => toggleFilterValue(value, setter)} aria-label={`Remove ${type} filter ${value}`}>
+              {value} <span aria-hidden="true">×</span>
+            </button>)}
+            <button type="button" className="text-button compact-clear" onClick={clearDiscoveryFilters}>Clear all</button>
+          </div>}
+          <p className="filter-help">Suggestions are drawn from the current feed and search results. They are keyword-based discovery aids, not verified classifications.</p>
+        </>}
         {libraryError && <p className="filter-help" style={{ color: "#b42318" }}>{libraryError}</p>}
         {showingSavedInvestigations ? (
           <div className="story-list">
@@ -1200,16 +1287,17 @@ style={{
           {visibleStories.length === 0 && (
             <div className="empty-state">
               <span>⌕</span>
-              <h3>No stories found</h3>
-              <p>Try another search or explore the full discovery feed.</p>
+              <h3>{activeFilterCount > 0 ? "No stories match your filters" : "No stories found"}</h3>
+              <p>{activeFilterCount > 0 ? "Try changing your search or removing some filters." : "Try another search or explore the full discovery feed."}</p>
               <button
                 className="text-button"
                 onClick={() => {
-                  setSearch("");
+                  if (activeFilterCount > 0) clearDiscoveryFilters();
+                  else setSearch("");
                   setActiveNav("Discover");
                 }}
               >
-                Reset discovery feed →
+                {activeFilterCount > 0 ? "Clear filters →" : "Reset discovery feed →"}
               </button>
             </div>
           )}
@@ -2774,6 +2862,7 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       font-size: 17px;
     }
     .filter-row {
+      position: relative;
       display: flex;
       gap: 9px;
       margin-bottom: 14px;
@@ -2795,38 +2884,7 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       padding: 8px 10px;
       font: inherit;
     }
-    .filter-option {
-      border: 1px solid #dbe1ea;
-      border-radius: 999px;
-      padding: 6px 10px;
-      background: white;
-      color: #374151;
-      font-size: 12px;
-      cursor: pointer;
-    }
-    .filter-option.selected { border-color: #5b5bc7; background: #efefff; color: #3730a3; }
     .filter-help { margin: -4px 0 14px; color: #64748b; font-size: 12px; }
-    .contextual-filters {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 12px;
-      margin: 0 0 14px;
-      padding: 12px;
-      border: 1px solid #ececf3;
-      border-radius: 10px;
-      background: #fafafe;
-    }
-    .suggestion-group { min-width: 0; }
-    .suggestion-label {
-      display: block;
-      margin-bottom: 7px;
-      color: #7775be;
-      font-size: 9px;
-      font-weight: 800;
-      letter-spacing: 1px;
-      text-transform: uppercase;
-    }
-    .suggestion-chips { display: flex; flex-wrap: wrap; gap: 6px; }
     .suggestion-empty { color: #9191a6; font-size: 11px; }
     .search-box {
       display: flex;
@@ -2877,8 +2935,86 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       background: #fff;
       color: #73738b;
       font-size: 11px;
+      font-weight: 700;
       white-space: nowrap;
+      cursor: pointer;
     }
+    .filter-button:hover, .filter-button[aria-expanded="true"] { border-color: #c9c8e9; color: #4e4cad; background: #fafaff; }
+    .filter-button:focus-visible, .filter-check:focus-within, .active-filter-chip:focus-visible {
+      outline: 2px solid #5d5bc2;
+      outline-offset: 2px;
+    }
+    .filters-popover {
+      position: absolute;
+      z-index: 25;
+      top: calc(100% + 7px);
+      right: 0;
+      width: min(490px, calc(100vw - 40px));
+      max-height: min(560px, calc(100vh - 160px));
+      overflow-y: auto;
+      padding: 16px;
+      border: 1px solid #e3e2f0;
+      border-radius: 11px;
+      background: #fff;
+      box-shadow: 0 16px 40px #25254a1c;
+    }
+    .filters-popover-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding-bottom: 11px;
+      border-bottom: 1px solid #efeff5;
+      color: #34334f;
+      font: 800 13px "Manrope", sans-serif;
+    }
+    .filters-popover-heading .text-button { padding: 0; font-size: 10px; }
+    .filters-popover-heading .text-button:disabled { color: #aaaabd; cursor: not-allowed; }
+    .filter-section { padding-top: 14px; }
+    .filter-section h3, .location-filter-group h4 {
+      margin: 0;
+      color: #7775be;
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+    }
+    .filter-section h3 { margin-bottom: 9px; }
+    .location-filter-group + .location-filter-group { margin-top: 13px; }
+    .location-filter-group h4 { margin-bottom: 7px; color: #9191a6; font-size: 8px; }
+    .filter-options { display: flex; flex-wrap: wrap; gap: 7px; }
+    .filter-check {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 29px;
+      padding: 5px 9px;
+      border: 1px solid #dbe1ea;
+      border-radius: 999px;
+      background: #fff;
+      color: #42415b;
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .filter-check:has(input:checked) { border-color: #5b5bc7; background: #efefff; color: #3730a3; }
+    .filter-check input { width: 13px; height: 13px; margin: 0; accent-color: #5d5bc2; }
+    .filters-popover .filter-help { margin: 14px 0 0; line-height: 1.5; }
+    .active-filter-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -5px 0 14px; }
+    .active-filter-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 5px 9px;
+      border: 1px solid #cbc9ec;
+      border-radius: 999px;
+      background: #f4f3ff;
+      color: #4d4bad;
+      font-size: 10px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .active-filter-chip span { font-size: 14px; line-height: 10px; }
+    .compact-clear { padding: 4px 5px; font-size: 10px; }
     .filter-chevron {
       color: #a3a3b5;
     }
@@ -3761,11 +3897,18 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       .search-box {
         flex-basis: 100%;
       }
-      .contextual-filters {
-        grid-template-columns: 1fr;
-      }
       .filter-button {
         height: 35px;
+      }
+      .filters-popover {
+        position: fixed;
+        top: auto;
+        right: 12px;
+        bottom: 12px;
+        left: 12px;
+        width: auto;
+        max-height: min(70vh, 560px);
+        border-radius: 13px;
       }
       .story-card {
         grid-template-columns: 14px minmax(0, 1fr);
