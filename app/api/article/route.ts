@@ -226,7 +226,7 @@ export async function POST(request: Request) {
       return apiError("BAD_REQUEST", "A valid article URL is required.", 400);
     }
 
-    if (investigationId !== undefined && (typeof investigationId !== "string" || !investigationId.trim())) {
+    if (typeof investigationId !== "string" || !investigationId.trim()) {
       return apiError("BAD_REQUEST", "The investigation ID is invalid.", 400);
     }
 
@@ -245,6 +245,37 @@ export async function POST(request: Request) {
       );
     }
 
+    // The article reader is part of the authenticated investigation workflow.
+    // Authorize before DNS lookup or publisher retrieval so an anonymous caller
+    // cannot use it as a server-side fetch primitive.
+    if (!isClerkConfigured() || !isDatabaseConfigured()) {
+      return apiError("SERVICE_UNAVAILABLE", "Authenticated source persistence is not configured.", 503);
+    }
+
+    const repository = getPostgresRepository();
+    let user;
+
+    try {
+      user = await getOrCreateCurrentUser(repository);
+    } catch (error) {
+      console.error("Journol could not resolve the authenticated article reader user:", {
+        name: error instanceof Error ? error.name : "UnknownError",
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return apiError("SERVICE_UNAVAILABLE", "Journol could not access account storage. Please try again.", 503);
+    }
+
+    if (!user) {
+      return apiError("UNAUTHORIZED", "Sign in to retrieve an article for an investigation.", 401);
+    }
+
+    try {
+      await requireInvestigationAccess(repository, user, investigationId, "editor");
+    } catch {
+      // Do not disclose the existence of an inaccessible investigation.
+      return apiError("BAD_REQUEST", "Investigation not found.", 404);
+    }
+
     const { html, finalUrl } = await retrieveHtml(
       requestedUrl.toString(),
       deadline,
@@ -260,16 +291,27 @@ export async function POST(request: Request) {
     // JSDOM/Readability processing is bounded by the HTML byte limit.
     // This work is synchronous and cannot be safely interrupted by an
     // AbortSignal once parsing has started.
-    const dom = new JSDOM(html, { url: finalUrl });
-
-    let article;
+    let article: ReturnType<Readability["parse"]>;
     let publishedAt: Date | null = null;
 
     try {
-      article = new Readability(dom.window.document).parse();
-      publishedAt = extractPublishedAt(dom.window.document);
-    } finally {
-      dom.window.close();
+      const dom = new JSDOM(html, { url: finalUrl });
+      try {
+        article = new Readability(dom.window.document).parse();
+        publishedAt = extractPublishedAt(dom.window.document);
+      } finally {
+        dom.window.close();
+      }
+    } catch (error) {
+      console.error("Journol article content processing failed:", {
+        name: error instanceof Error ? error.name : "UnknownError",
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return apiError(
+        "UPSTREAM_FAILURE",
+        "Journol retrieved the article but could not process its content. Please try again or choose another source.",
+        422,
+      );
     }
 
     if (!article || !article.textContent?.trim()) {
@@ -290,24 +332,9 @@ export async function POST(request: Request) {
 
     const limitedText = text.slice(0, MAX_ARTICLE_CHARACTERS);
 
-    let sourceArticle: { id: string; title: string | null } | null = null;
+    let sourceArticle: { id: string; title: string | null };
 
-    if (typeof investigationId === "string") {
-      if (!isClerkConfigured() || !isDatabaseConfigured()) {
-        return apiError("SERVICE_UNAVAILABLE", "Authenticated source persistence is not configured.", 503);
-      }
-
-      const repository = getPostgresRepository();
-      const user = await getOrCreateCurrentUser(repository);
-      if (!user) return apiError("UNAUTHORIZED", "Authentication is required to save a source article.", 401);
-
-      try {
-        await requireInvestigationAccess(repository, user, investigationId, "editor");
-      } catch {
-        // Do not disclose the existence of an inaccessible investigation.
-        return apiError("BAD_REQUEST", "Investigation not found.", 404);
-      }
-
+    try {
       const persisted = await repository.createSourceArticle({
         ownerUserId: user.id,
         originalUrl: requestedUrl.toString(),
@@ -326,6 +353,16 @@ export async function POST(request: Request) {
         addedByUserId: user.id,
       });
       sourceArticle = { id: persisted.id, title: persisted.title };
+    } catch (error) {
+      console.error("Journol article retrieval succeeded but source persistence failed:", {
+        name: error instanceof Error ? error.name : "UnknownError",
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return apiError(
+        "SERVICE_UNAVAILABLE",
+        "Journol retrieved the article but could not save it to this investigation. Please try again.",
+        503,
+      );
     }
 
     return NextResponse.json({

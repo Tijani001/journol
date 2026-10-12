@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useRouter } from "next/navigation";
 import { readApiResponse } from "@/lib/client/api";
 import { AuthControls } from "@/app/auth-controls";
+import { useAuthenticationReadiness } from "@/app/auth-readiness";
 import { contextualSuggestions, filterArticles } from "@/lib/news-discovery";
 import { countActiveFilters, nextFilterPopoverState, toggleFilterSelection } from "@/lib/editorial-radar-filters";
 import { normalizeStoryUrl } from "@/lib/story-url";
@@ -346,6 +348,8 @@ function useBrowserSearchParam(name: string) {
 }
 
 export default function Home() {
+  const { isLoaded: authenticationLoaded, isSignedIn } = useAuthenticationReadiness();
+  const router = useRouter();
   const [newsArticles, setNewsArticles] = useState<NewsArticle[]>([]);
 const [newsLoading, setNewsLoading] = useState(true);
 const [newsError, setNewsError] = useState("");
@@ -375,24 +379,30 @@ const [newsError, setNewsError] = useState("");
   const filtersPopoverRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-async function loadNews() {
-try {
-const response = await fetch("/api/news");
-    const data = await readApiResponse(response, "Story discovery");
-    const articles = Array.isArray(data.articles) ? data.articles as NewsArticle[] : [];
-    setNewsArticles(articles);
-    if (!articles.length) {
-      setNewsError("No news articles are currently available.");
-    }
-  } catch {
-    setNewsError("Unable to load news. Please try again later.");
-  } finally {
-    setNewsLoading(false);
-  }
-}
-loadNews();
+    if (!authenticationLoaded) return;
 
-}, []);
+    if (!isSignedIn) {
+      return;
+    }
+
+    async function loadNews() {
+      try {
+        const response = await fetch("/api/news");
+        const data = await readApiResponse(response, "Story discovery");
+        const articles = Array.isArray(data.articles) ? data.articles as NewsArticle[] : [];
+        setNewsArticles(articles);
+        if (!articles.length) {
+          setNewsError("No news articles are currently available.");
+        }
+      } catch (error) {
+        setNewsError(error instanceof Error ? error.message : "Unable to load news. Please try again later.");
+      } finally {
+        setNewsLoading(false);
+      }
+    }
+
+    void loadNews();
+  }, [authenticationLoaded, isSignedIn]);
   useEffect(() => {
     if (!filtersOpen) return;
 
@@ -500,11 +510,12 @@ loadNews();
   };
 
   useEffect(() => {
+    if (!authenticationLoaded || !isSignedIn) return;
     if (showingSavedInvestigations || activeNav === "Saved stories") {
       void refreshSavedInvestigations().catch(() => setSavedInvestigations([]));
       void refreshSavedStories().catch(() => setSavedStories([]));
     }
-  }, [showingSavedInvestigations, activeNav]);
+  }, [showingSavedInvestigations, activeNav, authenticationLoaded, isSignedIn]);
   useEffect(() => {
     const handleAuthChange = () => {
       // Never retain one account's private library while another session is
@@ -523,14 +534,25 @@ loadNews();
     return () => window.removeEventListener("journol-auth-change", handleAuthChange);
   }, [showingSavedInvestigations, activeNav]);
   useEffect(() => {
+    if (!authenticationLoaded || !isSignedIn) return;
     void refreshSavedInvestigations().catch(() => setSavedInvestigations([]));
     void refreshSavedStories().catch(() => setSavedStories([]));
-  }, []);
+  }, [authenticationLoaded, isSignedIn]);
   const analyzeLead = async (
     lead: Story,
     rejectedLead?: string,
     suppliedArticle?: { text: string; title?: string }
   ) => {
+    if (!authenticationLoaded) {
+      setAnalysisError("Journol is checking your sign-in status. Please try again in a moment.");
+      return;
+    }
+
+    if (!isSignedIn) {
+      router.replace("/sign-in");
+      return;
+    }
+
     const requestId = ++analysisRequestId.current;
     const isCurrent = () => requestId === analysisRequestId.current;
   
@@ -605,9 +627,12 @@ loadNews();
           ? articleData.error
           : "The full article could not be retrieved.";
       }
-    } catch {
-      articleRetrievalNote =
-        "Journol could not connect to the article reader.";
+    } catch (error) {
+      // Preserve the API's stage-specific response: extraction, account
+      // authorization, and source persistence need different recovery paths.
+      throw error instanceof Error
+        ? error
+        : new Error("Article retrieval failed before Journol could analyse this story.");
     }
   } else {
     articleRetrievalNote =
@@ -615,10 +640,11 @@ loadNews();
   }
   // The article route retrieves and persists the source in one server-side
   // operation; the browser never submits the extracted text as authority.
-  if (!articleText.trim() || !sourceArticleId) {
-    throw new Error(
-      "Journol could not retrieve and save this article for the investigation.",
-    );
+  if (!articleText.trim()) {
+    throw new Error(articleRetrievalNote || "Journol could not retrieve enough article text for a responsible lead.");
+  }
+  if (!sourceArticleId) {
+    throw new Error("Journol retrieved the article but could not save it to this investigation. Please try again.");
   }
 
   // Step 2: Select the investigative lead using the server-side source.

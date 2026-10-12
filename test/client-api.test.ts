@@ -20,4 +20,15 @@ describe("client API response handling", () => {
       "Saving investigation",
     )).rejects.toThrow("Saving investigation: Sign in to continue. (HTTP 401)");
   });
+
+  it("preserves a source-persistence error for the article-analysis flow", async () => {
+    await expect(readApiResponse(
+      new Response(JSON.stringify({
+        success: false,
+        code: "SERVICE_UNAVAILABLE",
+        error: "Journol retrieved the article but could not save it to this investigation. Please try again.",
+      }), { status: 503 }),
+      "Article retrieval",
+    )).rejects.toThrow("Article retrieval: Journol retrieved the article but could not save it to this investigation. Please try again. (HTTP 503)");
+  });
 });

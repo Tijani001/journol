@@ -3,6 +3,7 @@ import Parser from "rss-parser";
 import { apiError } from "@/lib/api";
 import { NEWS_SOURCES, deduplicateArticles, normalizeFeedItems } from "@/lib/news-discovery";
 import { limitRequest, requestRateLimitSubject } from "@/lib/access";
+import { getCurrentIdentity } from "@/lib/server/auth";
 const parser = new Parser({
   timeout: 10000,
   headers: {
@@ -11,6 +12,14 @@ const parser = new Parser({
 });
 
 export async function GET(request: Request) {
+  // Discovery is a dashboard capability. Check the verified server session in
+  // the route (rather than proxying API requests) to preserve JSON 401 errors.
+  if (!await getCurrentIdentity()) {
+    return apiError("UNAUTHORIZED", "Sign in to view story discoveries.", 401, {
+      "Cache-Control": "private, no-store",
+    });
+  }
+
   const quota = await limitRequest("news", requestRateLimitSubject(request), {
     limit: 60,
     windowSeconds: 600,

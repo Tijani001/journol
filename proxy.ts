@@ -2,23 +2,35 @@ import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse, type NextRequest } from "next/server";
 import { isClerkConfigured } from "@/lib/server/clerk-config";
 
-// Keep navigation to the legacy workspace behind Clerk at the edge. API
-// handlers deliberately authenticate and authorize their own resources: that
-// preserves their JSON error contract for the browser. Clerk's `auth.protect`
-// responds to an unauthenticated API request with an HTML 404, which prevents
-// clients from distinguishing an expired session from a missing endpoint.
-const isProtectedPage = createRouteMatcher(["/workspace(.*)"]);
+// API handlers deliberately authenticate and authorize their own resources:
+// Clerk's proxy protection returns an HTML 404 for unauthenticated API calls,
+// which would break the application's JSON error contract.
+const isProtectedPage = createRouteMatcher(["/", "/workspace(.*)"]);
+const isAuthenticationPage = createRouteMatcher(["/sign-in(.*)", "/sign-up(.*)"]);
 
 const clerkProxy = clerkMiddleware(async (auth, request) => {
   if (isProtectedPage(request)) await auth.protect();
+
+  if (isAuthenticationPage(request)) {
+    const { userId } = await auth();
+    if (userId) return NextResponse.redirect(new URL("/", request.url));
+  }
+
   return NextResponse.next();
 });
 
 /** Next.js 16 uses the proxy.ts convention. Route handlers still authorize data. */
 export default function proxy(request: NextRequest, event: Parameters<typeof clerkProxy>[1]) {
-  // Without configured Clerk keys, protected handlers/pages fail closed via the
-  // server auth boundary instead of treating an anonymous visitor as a user.
-  return isClerkConfigured() ? clerkProxy(request, event) : NextResponse.next();
+  if (isClerkConfigured()) return clerkProxy(request, event);
+
+  // Local development may use the explicit development identity seam. A
+  // production deployment without Clerk keys must not render the dashboard as
+  // anonymous content.
+  if (process.env.NODE_ENV === "production" && isProtectedPage(request)) {
+    return new NextResponse("Authentication is unavailable.", { status: 503 });
+  }
+
+  return NextResponse.next();
 }
 
 export const config = {

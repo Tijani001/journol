@@ -1,6 +1,6 @@
 # Closed-beta deployment guide
 
-This guide prepares a small, invitation-only Journol beta. It does **not**
+This guide prepares a small, authenticated Journol beta. It does **not**
 deploy the application, create infrastructure, or run a database migration
 automatically.
 
@@ -15,8 +15,9 @@ automatically.
    so the deployment matches Journol's declared runtime.
 2. Create or select the Clerk production application. Add the temporary
    Vercel domain as an allowed origin/redirect domain. In Clerk Dashboard,
-   enable **Restricted** sign-up mode and invite each beta journalist. Do not
-   use a hidden sign-up button as access control.
+   enable public sign-up for this beta. Journol's application routes and APIs
+   still require a verified Clerk session; hiding a sign-up button is not an
+   access-control mechanism.
 3. Create or select a Supabase PostgreSQL project. Use its server-only pooled
    PostgreSQL connection string; do not use the Supabase browser client or put
    the connection string in `NEXT_PUBLIC_*` configuration.
@@ -37,6 +38,10 @@ Clerk, database, rate-limit, and OpenAI environments.
 | --- | --- |
 | `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | Browser-visible Clerk publishable key |
 | `CLERK_SECRET_KEY` | Server-only Clerk secret |
+| `NEXT_PUBLIC_CLERK_SIGN_IN_URL` | Set to `/sign-in` |
+| `NEXT_PUBLIC_CLERK_SIGN_UP_URL` | Set to `/sign-up` |
+| `NEXT_PUBLIC_CLERK_SIGN_IN_FALLBACK_REDIRECT_URL` | Set to `/` |
+| `NEXT_PUBLIC_CLERK_SIGN_UP_FALLBACK_REDIRECT_URL` | Set to `/` |
 | `DATABASE_URL` | Server-only Supabase pooled PostgreSQL URL |
 | `DATABASE_SSL` | Set to `true` for Supabase |
 | `DATABASE_SSL_CA_CERT` | Optional Supabase database CA PEM when the runtime does not already trust its chain; use `\n` for line breaks |
@@ -88,11 +93,11 @@ work around the error.
 2. Deploy from the selected repository branch through Vercel. This must be an
    explicit owner action.
 3. Check `GET /api/health`; it should return only `{ "status": "ok" }`.
-4. As an invited Clerk user, test sign-in, investigation creation, article
+4. As a registered Clerk user, test sign-in, investigation creation, article
    retrieval, lead generation, approval, evidence assessment, plan generation,
    saving, and reopening a saved investigation.
-5. Confirm a non-invited visitor cannot create an account or access protected
-   investigation routes. Confirm a second invited user cannot open the first
+5. Confirm a signed-out visitor is redirected to sign in before reaching
+   Discover or protected investigation routes. Confirm a second signed-in user cannot open the first
    user's investigation.
 6. Check Vercel function logs, Clerk dashboard, Supabase database health, the
    shared limiter dashboard, and OpenAI project usage after the first sessions.

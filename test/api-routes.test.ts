@@ -87,8 +87,15 @@ describe("article route validation", () => {
     const { POST } = await import("@/app/api/article/route");
     const malformed = await POST(new Request("http://test", { method: "POST", body: "{" }));
     const oversized = await POST(new Request("http://test", { method: "POST", body: JSON.stringify({ url: "x".repeat(17_000) }) }));
-    if (!malformed || !oversized) throw new Error("Route returned no response");
+    const missingInvestigation = await POST(new Request("http://test", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: "https://example.test/article" }),
+    }));
+    if (!malformed || !oversized || !missingInvestigation) throw new Error("Route returned no response");
     expect(malformed.status).toBe(400);
     expect(oversized.status).toBe(413);
+    expect(missingInvestigation.status).toBe(400);
+    expect((await missingInvestigation.json()).code).toBe("BAD_REQUEST");
   }, 15_000);
 });
