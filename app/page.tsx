@@ -1274,6 +1274,24 @@ style={{
                 </div>
                 <h3>{story.title}</h3>
                 <p>{story.description}</p>
+                <button
+                  className="explore-button"
+                  aria-label={`Explore investigative lead for ${story.title}`}
+                  onClick={() => {
+                    setSelectedLead(story);
+                    setShowLeadDetails(true);
+                    analyzeLead(story);
+                  }}
+                >
+                  Explore Lead <span aria-hidden="true">↗</span>
+                </button>
+                <div className="story-score">
+                  <div className="score-label">LEAD SCORE</div>
+                  <div className="score-number">{story.score}</div>
+                  <div className="score-track">
+                    <span style={{ width: `${story.score}%` }} />
+                  </div>
+                </div>
                 <div className="story-bottom">
                   <span className="signal-tag">
                     <span className="signal-icon">✳</span>
@@ -1285,27 +1303,12 @@ style={{
                 </div>
               </div>
               <div className="story-actions">
-                <div className="score-label">LEAD SCORE</div>
-                <div className="score-number">{story.score}</div>
-                <div className="score-track">
-                  <span style={{ width: `${story.score}%` }} />
-                </div>
                 <button
                   className={`save-button ${savedStoryFor(story) ? "is-saved" : ""}`}
                   disabled={(() => { try { return savingStoryUrls.includes(normalizeStoryUrl(story.url)); } catch { return false; } })()}
                   onClick={() => void toggleSaveStory(story)}
                 >
                   {(() => { try { return savingStoryUrls.includes(normalizeStoryUrl(story.url)); } catch { return false; } })() ? "Saving…" : savedStoryFor(story) ? "♥ Saved" : "♡ Save"}
-                </button>
-                <button
-                  className="explore-button"
-                  onClick={() => {
-                    setSelectedLead(story);
-                    setShowLeadDetails(true);
-                    analyzeLead(story);
-                  }}
-                >
-                  Explore lead ↗
                 </button>
               </div>
             </article>
@@ -3150,12 +3153,52 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       color: #87879d;
       font-size: 10px;
       line-height: 1.7;
+      display: -webkit-box;
+      overflow: hidden;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+    }
+    .explore-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      align-self: flex-start;
+      min-height: 38px;
+      padding: 9px 13px;
+      border: 1px solid #5b5bc7;
+      border-radius: 7px;
+      background: #5b5bc7;
+      color: #fff;
+      font: 700 10px/1 "Manrope", sans-serif;
+      letter-spacing: 0.1px;
+      white-space: nowrap;
+      cursor: pointer;
+      transition: background 0.18s ease, border-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+    }
+    .explore-button:hover {
+      border-color: #49499f;
+      background: #49499f;
+      box-shadow: 0 4px 12px #5b5bc733;
+      transform: translateY(-1px);
+    }
+    .explore-button:focus-visible,
+    .save-button:focus-visible {
+      outline: 3px solid #bdbbff;
+      outline-offset: 2px;
+    }
+    .story-score {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-top: 12px;
     }
     .story-bottom {
       display: flex;
       align-items: center;
       flex-wrap: wrap;
       gap: 12px;
+      margin-top: 7px;
     }
     .signal-tag {
       display: flex;
@@ -3176,7 +3219,7 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       align-self: stretch;
       display: flex;
       flex-direction: column;
-      justify-content: center;
+      justify-content: flex-start;
       align-items: flex-end;
       min-width: 0;
     }
@@ -3187,14 +3230,12 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       letter-spacing: 0.6px;
     }
     .score-number {
-      margin: 5px 0;
       font: 800 25px "Manrope", sans-serif;
       letter-spacing: -1px;
     }
     .score-track {
       width: 65px;
       height: 4px;
-      margin-bottom: 13px;
       overflow: hidden;
       border-radius: 5px;
       background: #efeff7;
@@ -3206,6 +3247,7 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       background: #7774d6;
     }
     .save-button {
+      min-height: 32px;
       padding: 6px 9px;
       border: 1px solid #e9e8f5;
       border-radius: 6px;
@@ -3218,16 +3260,6 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       border-color: #e3dffb;
       background: #f3f1ff;
       color: #5552b7;
-    }
-    .explore-button {
-      margin-top: 7px;
-      padding: 4px 0;
-      border: 0;
-      background: transparent;
-      color: #7775be;
-      font-size: 9px;
-      font-weight: 700;
-      white-space: nowrap;
     }
     .empty-state {
       display: grid;
