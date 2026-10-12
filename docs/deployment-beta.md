@@ -49,6 +49,12 @@ Clerk, database, rate-limit, and OpenAI environments.
 Do not set `JOURNOL_DEV_USER_ID` in Vercel. Do not expose any server-only
 variable to browser code. `.env.example` lists placeholder names only.
 
+`NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` is embedded in the browser bundle during
+the Vercel build. Add it to the **Production** environment before deploying,
+and redeploy after changing it. If it is absent at build time, Journol
+intentionally renders no sign-in controls and protected API routes return an
+authentication error rather than treating a visitor as a user.
+
 ## Database migration procedure
 
 1. Create a fresh production database or take a verified backup of an existing

@@ -25,7 +25,14 @@ export async function readApiResponse(response: Response, endpoint: string): Pro
   }
 
   if (!response.ok) {
-    const message = typeof payload.error === "string" ? payload.error : "Request failed.";
+    const code = typeof payload.code === "string" ? payload.code : "";
+    const message = code === "UNAUTHORIZED"
+      ? "Sign in to continue."
+      : code === "FORBIDDEN"
+        ? "You do not have access to this resource."
+        : typeof payload.error === "string"
+          ? payload.error
+          : "Request failed.";
     throw new Error(`${endpoint}: ${message} (HTTP ${response.status}).`);
   }
 

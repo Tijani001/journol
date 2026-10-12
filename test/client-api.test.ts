@@ -13,4 +13,11 @@ describe("client API response handling", () => {
   it("reports non-JSON response bodies without a JSON parser exception", async () => {
     await expect(readApiResponse(new Response("<html>error</html>", { status: 500 }), "Investigation builder")).rejects.toThrow("Investigation builder returned a non-JSON response (HTTP 500)");
   });
+
+  it("turns an authenticated API JSON error into a sign-in message", async () => {
+    await expect(readApiResponse(
+      new Response(JSON.stringify({ success: false, code: "UNAUTHORIZED", error: "Authentication is required." }), { status: 401 }),
+      "Saving investigation",
+    )).rejects.toThrow("Saving investigation: Sign in to continue. (HTTP 401)");
+  });
 });

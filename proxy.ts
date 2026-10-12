@@ -2,13 +2,15 @@ import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse, type NextRequest } from "next/server";
 import { isClerkConfigured } from "@/lib/server/clerk-config";
 
-const isProtectedRoute = createRouteMatcher([
-  "/workspace(.*)",
-  "/api/investigations(.*)",
-]);
+// Keep navigation to the legacy workspace behind Clerk at the edge. API
+// handlers deliberately authenticate and authorize their own resources: that
+// preserves their JSON error contract for the browser. Clerk's `auth.protect`
+// responds to an unauthenticated API request with an HTML 404, which prevents
+// clients from distinguishing an expired session from a missing endpoint.
+const isProtectedPage = createRouteMatcher(["/workspace(.*)"]);
 
 const clerkProxy = clerkMiddleware(async (auth, request) => {
-  if (isProtectedRoute(request)) await auth.protect();
+  if (isProtectedPage(request)) await auth.protect();
   return NextResponse.next();
 });
 
