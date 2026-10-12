@@ -1274,22 +1274,21 @@ style={{
                 </div>
                 <h3>{story.title}</h3>
                 <p>{story.description}</p>
-                <button
-                  className="explore-button"
-                  aria-label={`Explore investigative lead for ${story.title}`}
-                  onClick={() => {
-                    setSelectedLead(story);
-                    setShowLeadDetails(true);
-                    analyzeLead(story);
-                  }}
-                >
-                  Explore Lead <span aria-hidden="true">↗</span>
-                </button>
-                <div className="story-score">
-                  <div className="score-label">LEAD SCORE</div>
-                  <div className="score-number">{story.score}</div>
-                  <div className="score-track">
-                    <span style={{ width: `${story.score}%` }} />
+                <div className="story-primary-row">
+                  <button
+                    className="explore-button"
+                    aria-label={`Explore investigative lead for ${story.title}`}
+                    onClick={() => {
+                      setSelectedLead(story);
+                      setShowLeadDetails(true);
+                      analyzeLead(story);
+                    }}
+                  >
+                    Explore Lead <span aria-hidden="true">↗</span>
+                  </button>
+                  <div className="story-score" aria-label={`Lead score ${story.score}`}>
+                    <span className="score-label">LEAD SCORE</span>
+                    <strong className="score-number">{story.score}</strong>
                   </div>
                 </div>
                 <div className="story-bottom">
@@ -1351,20 +1350,8 @@ style={{
     }}
   >
     <div
+      className="lead-details-modal"
       onClick={(event) => event.stopPropagation()}
-      style={{
-        width: "100%",
-        maxWidth: "760px",
-        maxHeight: "calc(100vh - 32px)",
-        overflowY: "auto",
-        boxSizing: "border-box",
-        padding: "24px",
-        background: "#ffffff",
-        border: "1px solid #ececf2",
-        borderRadius: "16px",
-        boxShadow: "0 24px 80px rgba(0, 0, 0, 0.25)",
-        position: "relative",
-      }}
     >
             <div
               style={{
@@ -1727,17 +1714,7 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
 
 {investigationPlan && (
 
-<div
-  style={{
-    padding: "24px",
-    marginTop: "24px",
-    border: "1px solid #d1d5db",
-    borderRadius: "12px",
-    background: "#ffffff",
-    color: "#111827",
-    lineHeight: 1.7,
-  }}
->
+<div className="investigation-plan-frame">
 <section className="investigation-plan">
   <div className="investigation-header">
     <div>
@@ -3187,11 +3164,18 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       outline: 3px solid #bdbbff;
       outline-offset: 2px;
     }
-    .story-score {
+    .story-primary-row {
       display: flex;
       align-items: center;
-      gap: 7px;
-      margin-top: 12px;
+      justify-content: space-between;
+      gap: 14px;
+    }
+    .story-score {
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: baseline;
+      gap: 6px;
+      color: #68677d;
     }
     .story-bottom {
       display: flex;
@@ -3230,21 +3214,9 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       letter-spacing: 0.6px;
     }
     .score-number {
-      font: 800 25px "Manrope", sans-serif;
+      color: #383750;
+      font: 800 18px/1 "Manrope", sans-serif;
       letter-spacing: -1px;
-    }
-    .score-track {
-      width: 65px;
-      height: 4px;
-      overflow: hidden;
-      border-radius: 5px;
-      background: #efeff7;
-    }
-    .score-track span {
-      display: block;
-      height: 100%;
-      border-radius: inherit;
-      background: #7774d6;
     }
     .save-button {
       min-height: 32px;
@@ -3315,17 +3287,33 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       color: #a2a2b5;
       font-size: 9px;
     }
+    .lead-details-modal {
+      position: relative;
+      box-sizing: border-box;
+      width: min(100%, 1040px);
+      max-height: calc(100vh - 32px);
+      overflow-y: auto;
+      padding: 32px;
+      border: 1px solid #ececf2;
+      border-radius: 16px;
+      background: #fff;
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.25);
+    }
+    .investigation-plan-frame {
+      margin-top: 28px;
+      color: #292943;
+    }
           /* Investigation Plan */
     .investigation-plan {
       max-width: 100%;
-      margin-top: 28px;
-      padding: 30px;
+      margin-top: 0;
+      padding: 34px 38px;
       border: 1px solid #e9e8f2;
       border-radius: 16px;
       background: #fff;
       color: #292943;
-      font-size: 13px;
-      line-height: 1.75;
+      font-size: 14px;
+      line-height: 1.8;
       overflow-wrap: anywhere;
     }
 
@@ -3358,8 +3346,8 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
     .investigation-subtitle {
       margin: 8px 0 0;
       color: #85869c;
-      font-size: 12px;
-      line-height: 1.7;
+      font-size: 13px;
+      line-height: 1.75;
     }
 
     .investigation-status {
@@ -3474,8 +3462,8 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
     .plan-section-heading p {
       margin: 3px 0 0;
       color: #8b8ba0;
-      font-size: 11px;
-      line-height: 1.6;
+      font-size: 12px;
+      line-height: 1.7;
     }
 
     .approved-lead-card > p {
@@ -3511,8 +3499,8 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
     .first-action-card p {
       margin: 7px 0 0;
       color: #4e5f79;
-      font-size: 12px;
-      line-height: 1.8;
+      font-size: 14px;
+      line-height: 1.85;
     }
 
     .plan-section {
@@ -3522,7 +3510,7 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
     .plan-section > .plan-body {
       margin: 0;
       color: #626279;
-      font-size: 12px;
+      font-size: 14px;
       line-height: 1.9;
     }
 
@@ -3533,7 +3521,7 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
     }
 
     .plan-item-card {
-      padding: 18px 20px;
+      padding: 22px 24px;
       border: 1px solid #ececf3;
       border-radius: 10px;
       background: #fff;
@@ -3542,8 +3530,8 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
     .plan-item-card > p {
       margin: 0;
       color: #56566e;
-      font-size: 12px;
-      line-height: 1.85;
+      font-size: 14px;
+      line-height: 1.9;
     }
 
     .plan-status-label {
@@ -3557,15 +3545,25 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
     }
 
     .plan-question {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
       margin: 0;
+      padding: 16px 18px;
+      border: 1px solid #eeedf5;
+      border-left: 3px solid #d8d6f4;
+      border-radius: 8px;
+      background: #fcfcff;
       color: #383850;
-      font: 700 12px/1.8 "Manrope", sans-serif;
+      font: 700 14px/1.8 "Manrope", sans-serif;
     }
+    .plan-question > span { flex: 0 0 auto; color: #6562c8; font-size: 11px; letter-spacing: 0.5px; }
+    .plan-question > p { margin: 0; }
 
     .plan-card-grid {
       display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 13px;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 16px;
       margin-top: 15px;
     }
 
@@ -3587,8 +3585,8 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
     .plan-detail p {
       margin: 0;
       color: #626279;
-      font-size: 11px;
-      line-height: 1.8;
+      font-size: 13px;
+      line-height: 1.85;
     }
 
     .verification-timeline {
@@ -3637,8 +3635,8 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
 
     .verification-step-content {
       min-width: 0;
-      margin-bottom: 20px;
-      padding: 18px 20px;
+      margin-bottom: 24px;
+      padding: 24px 26px;
       border: 1px solid #ececf3;
       border-radius: 10px;
       background: #fff;
@@ -3647,24 +3645,24 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
     .verification-step-content h4 {
       margin: 0;
       color: #33334d;
-      font: 800 13px/1.7 "Manrope", sans-serif;
+      font: 800 15px/1.7 "Manrope", sans-serif;
     }
 
     .verification-step-content > p {
       margin: 8px 0 0;
       color: #626279;
-      font-size: 11px;
-      line-height: 1.85;
+      font-size: 13px;
+      line-height: 1.9;
     }
 
     .plan-next-step {
       margin-top: 13px;
-      padding: 12px 14px;
+      padding: 15px 17px;
       border-radius: 7px;
       background: #f5f5fc;
       color: #56558f;
-      font-size: 11px;
-      line-height: 1.8;
+      font-size: 13px;
+      line-height: 1.85;
     }
 
     .plan-next-step strong {
@@ -3679,8 +3677,8 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       margin: 15px 0 0;
       padding-left: 20px;
       color: #626279;
-      font-size: 12px;
-      line-height: 1.85;
+      font-size: 14px;
+      line-height: 1.9;
     }
 
     .plan-bullet-list li::marker {
@@ -3758,8 +3756,14 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
     }
 
     @media (max-width: 700px) {
+      .lead-details-modal {
+        width: 100%;
+        max-height: calc(100vh - 24px);
+        padding: 20px 16px;
+        border-radius: 13px;
+      }
       .investigation-plan {
-        padding: 18px 14px;
+        padding: 24px 18px;
       }
 
       .investigation-header {
@@ -3775,7 +3779,7 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       .first-action-card,
       .verification-step-content,
       .confidence-card {
-        padding: 16px;
+        padding: 18px;
       }
 
       .plan-card-grid,
@@ -3784,17 +3788,16 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       }
 
       .verification-step {
-        grid-template-columns: 30px minmax(0, 1fr);
-        gap: 9px;
+        grid-template-columns: 1fr;
+        gap: 8px;
       }
 
-      .verification-step-marker span {
-        width: 29px;
-        height: 29px;
+      .verification-step-marker {
+        justify-content: flex-start;
       }
 
       .verification-step-marker::after {
-        top: 32px;
+        display: none;
       }
     }
     @media (min-width: 1500px) {
@@ -3984,16 +3987,23 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
         padding-top: 10px;
         border-top: 1px solid #f0f0f6;
       }
-      .score-label,
-      .score-track {
-        display: none;
+      .story-primary-row {
+        gap: 10px;
+      }
+      .story-score {
+        gap: 5px;
+      }
+      .score-label {
+        display: inline;
       }
       .score-number {
         margin: 0;
         font-size: 17px;
       }
       .explore-button {
-        margin: 0;
+        min-height: 40px;
+        padding-right: 12px;
+        padding-left: 12px;
       }
       .story-main h3 {
         font-size: 12px;
