@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { readApiResponse } from "@/lib/client/api";
 import { AuthControls } from "@/app/auth-controls";
 import { useAuthenticationReadiness } from "@/app/auth-readiness";
+import { ActionSpinner, InteractionFeedback, type InteractionFeedbackMessage } from "@/app/interaction-feedback";
 import { contextualSuggestions, filterArticles } from "@/lib/news-discovery";
 import { countActiveFilters, nextFilterPopoverState, toggleFilterSelection } from "@/lib/editorial-radar-filters";
 import { normalizeStoryUrl } from "@/lib/story-url";
@@ -370,6 +371,7 @@ const [newsError, setNewsError] = useState("");
   const [savedInvestigations, setSavedInvestigations] = useState<Array<Record<string, unknown>> | null>(null);
   const [investigationSaved, setInvestigationSaved] = useState(false);
   const [savingInvestigation, setSavingInvestigation] = useState(false);
+  const [openingSavedInvestigationId, setOpeningSavedInvestigationId] = useState<string | null>(null);
   const activeInvestigationRef = useRef<string | null>(null);
   const workflowRequestId = useRef(0);
   const savedListRequestId = useRef(0);
@@ -442,7 +444,12 @@ const [newsError, setNewsError] = useState("");
   const [retrievedArticleText, setRetrievedArticleText] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState("");
+  const [interactionFeedback, setInteractionFeedback] = useState<InteractionFeedbackMessage | null>(null);
   const analysisRequestId = useRef(0);
+
+  const showFeedback = (kind: InteractionFeedbackMessage["kind"], message: string) => {
+    setInteractionFeedback({ kind, message });
+  };
 
   useEffect(() => {
     activeInvestigationRef.current = currentInvestigationId;
@@ -543,8 +550,9 @@ const [newsError, setNewsError] = useState("");
     rejectedLead?: string,
     suppliedArticle?: { text: string; title?: string }
   ) => {
-    if (!authenticationLoaded) {
+  if (!authenticationLoaded) {
       setAnalysisError("Journol is checking your sign-in status. Please try again in a moment.");
+      showFeedback("info", "Journol is checking your sign-in status.");
       return;
     }
 
@@ -556,13 +564,13 @@ const [newsError, setNewsError] = useState("");
     const requestId = ++analysisRequestId.current;
     const isCurrent = () => requestId === analysisRequestId.current;
   
-    setIsAnalyzing(true);
+  setIsAnalyzing(true);
     setAnalysisError("");
     setAiAnalysis(null);
     setRetrievedArticleText("");
     setProposedLead(null);
     setLeadApproved(false);
-    setInvestigationPlan(null);
+  setInvestigationPlan(null);
 
   let articleText = "";
   let articleRetrievalNote = "";
@@ -694,16 +702,15 @@ const [newsError, setNewsError] = useState("");
         : "Full article text is unavailable. The analysis relies on the supplied headline, description, and other available context."
     ),
   });
+  showFeedback("success", "Investigative lead ready to review.");
   return;
   
   
   } catch (error) {
   if (isCurrent()) {
-    setAnalysisError(
-      error instanceof Error
-        ? error.message
-        : "Journol could not analyse this story."
-    );
+    const message = error instanceof Error ? error.message : "Journol could not analyse this story.";
+    setAnalysisError(message);
+    showFeedback("error", message);
   }
   } 
   finally {
@@ -721,6 +728,7 @@ const [newsError, setNewsError] = useState("");
   
     if (!submittedUrl) {
       setCustomStoryError("Please paste a story URL.");
+      showFeedback("error", "Paste an article URL before starting an analysis.");
       return;
     }
   
@@ -730,11 +738,13 @@ const [newsError, setNewsError] = useState("");
       parsedUrl = new URL(submittedUrl);
     } catch {
       setCustomStoryError("Please enter a valid article URL.");
+      showFeedback("error", "Enter a valid article URL before starting an analysis.");
       return;
     }
   
     if (!["http:", "https:"].includes(parsedUrl.protocol)) {
       setCustomStoryError("Please enter an HTTP or HTTPS article URL.");
+      showFeedback("error", "Use an HTTP or HTTPS article URL.");
       return;
     }
   
@@ -766,11 +776,9 @@ const [newsError, setNewsError] = useState("");
   
       await analyzeLead(submittedStory);
     } catch (error) {
-      setCustomStoryError(
-        error instanceof Error
-          ? error.message
-          : "Journol could not analyse this story."
-      );
+      const message = error instanceof Error ? error.message : "Journol could not analyse this story.";
+      setCustomStoryError(message);
+      showFeedback("error", message);
     } finally {
       setIsSubmittingCustomStory(false);
     }
@@ -849,12 +857,16 @@ const filteredStories = discoverLeads(filterArticles(newsArticles, {
       if (existing) {
         savedStoryListRequestId.current += 1;
         setSavedStories((items) => items?.filter((item) => item.id !== existing.id) ?? []);
+        showFeedback("success", "Story removed from Your Library.");
       } else if (data.story && typeof data.story === "object") {
         const confirmed = data.story as SavedStoryRecord;
         setSavedStories((items) => items ? [confirmed, ...items.filter((item) => item.canonicalUrl !== confirmed.canonicalUrl)] : [confirmed]);
+        showFeedback("success", "Story saved to Your Library.");
       }
     } catch (error) {
-      setLibraryError(error instanceof Error ? error.message : "Unable to update the saved story.");
+      const message = error instanceof Error ? error.message : "Unable to update the saved story.";
+      setLibraryError(message);
+      showFeedback("error", message);
     } finally {
       storySaveRequests.current.delete(canonicalUrl);
       setSavingStoryUrls((urls) => urls.filter((url) => url !== canonicalUrl));
@@ -879,18 +891,24 @@ const filteredStories = discoverLeads(filterArticles(newsArticles, {
         // removed card after this confirmed DELETE response.
         savedListRequestId.current += 1;
         setSavedInvestigations((items) => items?.filter((item) => (item.investigation as Record<string, unknown> | undefined)?.id !== investigationToUpdate) ?? []);
+        showFeedback("success", "Investigation removed from Your Library.");
       } else {
         await refreshSavedInvestigations();
+        showFeedback("success", "Investigation saved to Your Library.");
       }
     } catch (error) {
-      setInvestigationError(error instanceof Error ? error.message : "Unable to update the saved investigation.");
+      const message = error instanceof Error ? error.message : "Unable to update the saved investigation.";
+      setInvestigationError(message);
+      showFeedback("error", message);
     } finally {
       setSavingInvestigation(false);
     }
   }
 
   async function openSavedInvestigation(investigationToOpen: string, fallbackTitle: string) {
+    if (openingSavedInvestigationId) return;
     const requestId = ++planOpenRequestId.current;
+    setOpeningSavedInvestigationId(investigationToOpen);
     try {
       const data = await readApiResponse(await fetch(`/api/investigations/${encodeURIComponent(investigationToOpen)}`, { cache: "no-store" }), "Saved investigation");
       if (requestId !== planOpenRequestId.current) return;
@@ -921,13 +939,21 @@ const filteredStories = discoverLeads(filterArticles(newsArticles, {
       setActivePlanInvestigationId(investigationToOpen);
       setInvestigationSaved(data.saved === true);
       setShowLeadDetails(true);
+      showFeedback("success", "Saved investigation opened.");
     } catch (error) {
-      setInvestigationError(error instanceof Error ? error.message : "Unable to open the saved investigation.");
+      const message = error instanceof Error ? error.message : "Unable to open the saved investigation.";
+      setInvestigationError(message);
+      showFeedback("error", message);
+    } finally {
+      if (requestId === planOpenRequestId.current) {
+        setOpeningSavedInvestigationId(null);
+      }
     }
   }
 
   return (
     <main className="journol-app">
+      <InteractionFeedback feedback={interactionFeedback} onDismiss={() => setInteractionFeedback(null)} />
       <aside className="sidebar">
         <a
           className="brand"
@@ -935,6 +961,7 @@ const filteredStories = discoverLeads(filterArticles(newsArticles, {
           onClick={(event) => {
             event.preventDefault();
             setActiveNav("Discover");
+            setShowLeadDetails(false);
           }}
         >
           <span className="brand-mark">j.</span>
@@ -949,6 +976,7 @@ const filteredStories = discoverLeads(filterArticles(newsArticles, {
         <button
           key={item.label}
           className={`nav-item ${activeNav === item.label ? "active" : ""}`}
+          aria-current={activeNav === item.label ? "page" : undefined}
           onClick={() => setActiveNav(item.label)}
         >
           <span className="nav-icon">{item.icon}</span>
@@ -962,6 +990,7 @@ const filteredStories = discoverLeads(filterArticles(newsArticles, {
         <button
           key={item.label}
           className={`nav-item ${activeNav === item.label ? "active" : ""}`}
+          aria-current={activeNav === item.label ? "page" : undefined}
           onClick={() => setActiveNav(item.label)}
         >
           <span className="nav-icon">{item.icon}</span>
@@ -993,7 +1022,7 @@ const filteredStories = discoverLeads(filterArticles(newsArticles, {
         <button
           className="icon-button"
           aria-label="Notifications"
-          onClick={() => window.alert("You're all caught up.")}
+          onClick={() => showFeedback("info", "You’re all caught up.")}
         >
           ♧
         </button>
@@ -1085,6 +1114,7 @@ const filteredStories = discoverLeads(filterArticles(newsArticles, {
 <button
   type="submit"
   disabled={isSubmittingCustomStory}
+  aria-busy={isSubmittingCustomStory}
   style={{
     padding: "14px 22px",
     border: "none",
@@ -1096,7 +1126,7 @@ const filteredStories = discoverLeads(filterArticles(newsArticles, {
     cursor: isSubmittingCustomStory ? "wait" : "pointer",
   }}
 >
-  {isSubmittingCustomStory ? "Analysing story..." : "Analyse Story →"}
+  {isSubmittingCustomStory ? <><ActionSpinner label="Analysing story" /> Analysing…</> : "Analyse Story →"}
 </button>
   </form>
 
@@ -1134,6 +1164,7 @@ style={{
           <button
             className="text-button"
             onClick={() => setShowAll((previous) => !previous)}
+            aria-pressed={showAll}
           >
             {showAll ? "Show less" : "View all discoveries"} <span>→</span>
           </button>
@@ -1156,6 +1187,7 @@ style={{
               aria-expanded={filtersOpen}
               aria-controls="editorial-radar-filters"
               onClick={() => setFiltersOpen((open) => nextFilterPopoverState(open, "toggle"))}
+              aria-pressed={filtersOpen}
             >
               <span aria-hidden="true">⚙</span>
               Filters{activeFilterCount > 0 ? ` (${activeFilterCount})` : ""}
@@ -1227,12 +1259,12 @@ style={{
               return <article className="story-card" key={id}>
                 <div className="story-index">♥</div>
                 <div className="story-illustration saved-investigation-illustration" aria-hidden="true"><span className="illustration-symbol">◎</span></div>
-                <button className="story-main text-left" onClick={() => void openSavedInvestigation(id, title)}>
+                <button className="story-main text-left" disabled={openingSavedInvestigationId !== null} aria-busy={openingSavedInvestigationId === id} onClick={() => void openSavedInvestigation(id, title)}>
                   <div className="story-meta"><span className="category-pill">SAVED</span><span className="meta-dot">·</span><span>{publisher}</span><span className="meta-dot">·</span><span>Saved {savedAt}</span></div>
                   <h3>{title}</h3>
-                  <p className="saved-investigation-preview">{preview}</p>
+                  <p className="saved-investigation-preview">{openingSavedInvestigationId === id ? <><ActionSpinner label="Opening saved investigation" /> Opening saved investigation…</> : preview}</p>
                 </button>
-                <div className="story-actions"><button className="save-button is-saved" disabled={savingInvestigation} onClick={() => void setLibrarySaved(id, false)}>{savingInvestigation ? "Removing…" : "♥ Remove"}</button></div>
+                <div className="story-actions"><button className="save-button is-saved" disabled={savingInvestigation} onClick={() => void setLibrarySaved(id, false)}>{savingInvestigation ? <><ActionSpinner label="Removing saved investigation" /> Removing…</> : "♥ Remove"}</button></div>
               </article>;
             })}
             {savedInvestigations?.length === 0 && <div className="empty-state"><span>◎</span><h3>No saved investigations</h3><p>Save an investigation plan to keep it in your library.</p></div>}
@@ -1278,13 +1310,16 @@ style={{
                   <button
                     className="explore-button"
                     aria-label={`Explore investigative lead for ${story.title}`}
-                    onClick={() => {
+                  onClick={() => {
+                      if (isAnalyzing) return;
                       setSelectedLead(story);
                       setShowLeadDetails(true);
-                      analyzeLead(story);
+                      void analyzeLead(story);
                     }}
+                    disabled={isAnalyzing}
+                    aria-busy={isAnalyzing}
                   >
-                    Explore Lead <span aria-hidden="true">↗</span>
+                    {isAnalyzing ? <><ActionSpinner label="Exploring lead" /> Exploring…</> : <>Explore Lead <span aria-hidden="true">↗</span></>}
                   </button>
                   <div className="story-score" aria-label={`Lead score ${story.score}`}>
                     <span className="score-label">LEAD SCORE</span>
@@ -1305,9 +1340,10 @@ style={{
                 <button
                   className={`save-button ${savedStoryFor(story) ? "is-saved" : ""}`}
                   disabled={(() => { try { return savingStoryUrls.includes(normalizeStoryUrl(story.url)); } catch { return false; } })()}
+                  aria-busy={(() => { try { return savingStoryUrls.includes(normalizeStoryUrl(story.url)); } catch { return false; } })()}
                   onClick={() => void toggleSaveStory(story)}
                 >
-                  {(() => { try { return savingStoryUrls.includes(normalizeStoryUrl(story.url)); } catch { return false; } })() ? "Saving…" : savedStoryFor(story) ? "♥ Saved" : "♡ Save"}
+                  {(() => { try { return savingStoryUrls.includes(normalizeStoryUrl(story.url)); } catch { return false; } })() ? <><ActionSpinner label="Saving story" /> Saving…</> : savedStoryFor(story) ? "♥ Saved" : "♡ Save"}
                 </button>
               </div>
             </article>
@@ -1433,7 +1469,9 @@ style={{
       <h3>Analysis unsuccessful</h3>
       <p>{analysisError}</p>
       <button
-        onClick={() => analyzeLead(selectedLead)}
+        onClick={() => void analyzeLead(selectedLead)}
+        disabled={isAnalyzing}
+        aria-busy={isAnalyzing}
         style={{
           padding: "10px 14px",
           background: "#5b5bc7",
@@ -1442,7 +1480,7 @@ style={{
           borderRadius: "8px",
         }}
       >
-        Try again
+        {isAnalyzing ? <><ActionSpinner label="Analysing story" /> Analysing…</> : "Try again"}
       </button>
     </div>
   )}
@@ -1531,9 +1569,9 @@ if (failedChecks.length > 0) {
   return;
 }
 
-      setIsBuildingInvestigation(true);
-      setInvestigationError("");
-      setInvestigationPlan(null);
+        setIsBuildingInvestigation(true);
+        setInvestigationError("");
+        setInvestigationPlan(null);
 
       try {
         if (!currentInvestigationId) {
@@ -1642,17 +1680,17 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
 
         setInvestigationPlan(data.plan as InvestigationPlan);
         setActivePlanInvestigationId(currentInvestigationId);
+        showFeedback("success", "Evidence assessment and investigation plan are ready.");
       } catch (error) {
-        setInvestigationError(
-          error instanceof Error
-            ? error.message
-            : "Something went wrong while building the investigation plan."
-        );
+        const message = error instanceof Error ? error.message : "Something went wrong while building the investigation plan.";
+        setInvestigationError(message);
+        showFeedback("error", message);
       } finally {
         setIsBuildingInvestigation(false);
       }
     }}
     disabled={isBuildingInvestigation}
+    aria-busy={isBuildingInvestigation}
     style={{
       padding: "10px 14px",
       background: leadApproved ? "#15803d" : "#3730a3",
@@ -1662,10 +1700,13 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       cursor: isBuildingInvestigation ? "wait" : "pointer",
     }}
   >
-    {leadApproved ? "Retry evidence & plan" : "Approve lead & build plan"}
+    {isBuildingInvestigation
+      ? <><ActionSpinner label="Generating investigation plan" /> Generating…</>
+      : leadApproved ? "Retry evidence & plan" : "Approve lead & build plan"}
   </button>
 
   <button
+    disabled={isAnalyzing || isBuildingInvestigation}
     onClick={() => {
       const rejectedQuestion = proposedLead?.primaryLead;
     
@@ -1673,7 +1714,7 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       setLeadApproved(false);
       setAiAnalysis(null);
     
-      analyzeLead(selectedLead, rejectedQuestion);
+      void analyzeLead(selectedLead, rejectedQuestion);
     }}
     style={{
       padding: "10px 14px",
@@ -1684,7 +1725,7 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       cursor: "pointer",
     }}
   >
-    Reject / Clear Lead
+    {isAnalyzing ? <><ActionSpinner label="Generating a replacement lead" /> Generating…</> : "Reject / Clear Lead"}
   </button>
 </div>
   </div>
@@ -1730,11 +1771,14 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       <button
         className={`save-button ${investigationSaved ? "is-saved" : ""}`}
         disabled={savingInvestigation || !(activePlanInvestigationId || currentInvestigationId)}
+        aria-busy={savingInvestigation}
         onClick={() => {
           const investigationToUpdate = activePlanInvestigationId || currentInvestigationId;
           if (investigationToUpdate) void setLibrarySaved(investigationToUpdate, !investigationSaved);
         }}
-      >{savingInvestigation ? (investigationSaved ? "Removing…" : "Saving…") : investigationSaved ? "♥ Saved" : "♡ Save investigation"}</button>
+      >{savingInvestigation
+        ? <><ActionSpinner label={investigationSaved ? "Removing saved investigation" : "Saving investigation"} /> {investigationSaved ? "Removing…" : "Saving…"}</>
+        : investigationSaved ? "♥ Saved" : "♡ Save investigation"}</button>
     </div>
   </div>
 
