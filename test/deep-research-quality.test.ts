@@ -83,6 +83,40 @@ describe("Deep Research quality controls", () => {
     expect(validateResearchReport(coherent, [source])).toEqual({ valid: true, reason: null, category: null });
   });
 
+  it("keeps every supporting source when a qualified summary retains a later numeric finding", () => {
+    const sources = Array.from({ length: 8 }, (_, index) => ({
+      ...source,
+      id: `source-${index + 1}`,
+      snippet: index === 7
+        ? "The agency said its 2026 report was published after a public review."
+        : `The agency said report ${index + 1} was published after a public review.`,
+    }));
+    const findings = [0, 2, 4, 6].map((index, findingIndex) => {
+      const primary = sources[index];
+      const supporting = sources[index + 1];
+      const claim = findingIndex === 3
+        ? "The agency said its 2026 report was published after a public review."
+        : `The agency said report ${index + 1} was published after a public review.`;
+      return {
+        claim,
+        evidenceStatus: "Attributed",
+        alignmentStatus: "attributed_statement",
+        sourceIds: [primary.id, supporting.id],
+        evidence: [{ sourceId: findingIndex === 3 ? supporting.id : primary.id, excerpt: findingIndex === 3 ? supporting.snippet : primary.snippet }],
+        evidenceExplanation: "The retrieved excerpt attributes this statement to the agency.",
+      };
+    });
+    const summary = qualifiedIntelligenceSummary({
+      originalTitle: "Agency report",
+      sourceCards: sources,
+      report: report({ keyFindings: findings }),
+    });
+
+    const enriched = attachSourceExcerpts({ executiveSummary: summary }, sources);
+    expect(summary.sourceIds).toHaveLength(8);
+    expect(summaryValidationDiagnostic(enriched, sources)).toBe("valid");
+  });
+
   it("does not recover a report when removing invalid findings leaves no supported core finding", () => {
     const candidate = report({ keyFindings: [{ ...finding, claim: "The ministry spent the allocation." }] });
     const recovered = removeInvalidResearchFindings(candidate, [source]);

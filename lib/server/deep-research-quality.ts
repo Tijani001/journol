@@ -340,7 +340,12 @@ export function qualifiedIntelligenceSummary(input: {
   const timelineSourceIds = timeline && Array.isArray(timeline.sourceIds)
     ? timeline.sourceIds.filter((id: unknown): id is string => typeof id === "string")
     : [];
-  const sourceIds = [...new Set([...claims.flatMap((item) => item.sourceIds), ...timelineSourceIds])].slice(0, 6);
+  // The reconstructed text can contain a figure from any retained finding.
+  // Keep every cited source rather than truncating this list for presentation:
+  // truncation could remove the only excerpt containing a retained number,
+  // causing the fallback itself to fail the same grounding check it is meant
+  // to satisfy. Source cards are already bounded by the research workflow.
+  const sourceIds = [...new Set([...claims.flatMap((item) => item.sourceIds), ...timelineSourceIds])];
   if ((claims.length || timeline) && sourceIds.length) {
     const core = claims.filter((item) => item.section === "core").map((item) => item.claim);
     const institutional = claims.filter((item) => item.section === "institutional").map((item) => item.claim);
