@@ -1,4 +1,25 @@
+import { journalistMessageForApiFailure, type JournalistMessage } from "@/lib/client/journalist-messages";
+
 export type ApiObject = Record<string, unknown>;
+
+export class JournolApiError extends Error {
+  readonly code: string;
+  readonly status: number;
+  readonly journalistMessage: JournalistMessage;
+
+  constructor(input: { code?: string; status: number; endpoint: string }) {
+    const journalistMessage = journalistMessageForApiFailure({
+      code: input.code,
+      status: input.status,
+      endpoint: input.endpoint,
+    });
+    super(journalistMessage.detail);
+    this.name = "JournolApiError";
+    this.code = input.code || "UNEXPECTED_FAILURE";
+    this.status = input.status;
+    this.journalistMessage = journalistMessage;
+  }
+}
 
 function isObject(value: unknown): value is ApiObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -16,24 +37,17 @@ export async function readApiResponse(response: Response, endpoint: string): Pro
     try {
       payload = JSON.parse(responseText);
     } catch {
-      throw new Error(`${endpoint} returned a non-JSON response (HTTP ${response.status}).`);
+      throw new JournolApiError({ status: response.status, endpoint });
     }
   }
 
   if (!isObject(payload)) {
-    throw new Error(`${endpoint} returned an empty or invalid response (HTTP ${response.status}).`);
+    throw new JournolApiError({ status: response.status, endpoint });
   }
 
   if (!response.ok) {
     const code = typeof payload.code === "string" ? payload.code : "";
-    const message = code === "UNAUTHORIZED"
-      ? "Sign in to continue."
-      : code === "FORBIDDEN"
-        ? "You do not have access to this resource."
-        : typeof payload.error === "string"
-          ? payload.error
-          : "Request failed.";
-    throw new Error(`${endpoint}: ${message} (HTTP ${response.status}).`);
+    throw new JournolApiError({ code, status: response.status, endpoint });
   }
 
   return payload;

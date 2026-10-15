@@ -4,12 +4,12 @@ import { randomUUID } from "node:crypto";
 import type { Pool, QueryResultRow } from "pg";
 import { getDatabasePool } from "@/lib/server/database";
 import type {
-  AiOperation, AiOperationStage, AiOperationStatus, EvidenceAssessment, Id,
+  AiOperation, AiOperationStage, AiOperationStatus, DeepResearchReport, EvidenceAssessment, Id,
   Investigation, InvestigationAction, InvestigationPlan, InvestigativeLead,
   SavedStory, SourceArticle, UsageRecord, User,
 } from "@/lib/domain/types";
 import type {
-  CreateActionInput, CreateAiOperationInput, CreateEvidenceAssessmentInput,
+  CreateActionInput, CreateAiOperationInput, CreateDeepResearchReportInput, CreateEvidenceAssessmentInput,
   CreateInvestigationPlanInput, CreateInvestigationInput, CreateLeadInput, CreatePlanWithActionsInput,
   CreateSourceArticleInput, CreateUserInput, JournolRepository, RecordUsageInput, SaveStoryInput,
 } from "@/lib/server/repository";
@@ -40,6 +40,9 @@ function assessmentFromRow(row: Row): EvidenceAssessment {
 }
 function planFromRow(row: Row): InvestigationPlan {
   return { id: String(row.id), investigationId: String(row.investigation_id), leadId: String(row.lead_id), evidenceAssessmentId: String(row.evidence_assessment_id), version: Number(row.version), content: object(row.content), model: nullableString(row.model), createdByUserId: String(row.created_by_user_id), createdAt: date(row.created_at), updatedAt: date(row.updated_at) };
+}
+function deepResearchFromRow(row: Row): DeepResearchReport {
+  return { id: String(row.id), investigationId: String(row.investigation_id), sourceArticleId: String(row.source_article_id), version: Number(row.version), instructions: nullableString(row.instructions), inputSnapshotHash: String(row.input_snapshot_hash), researchPlan: object(row.research_plan), report: object(row.report), sources: Array.isArray(row.sources) ? row.sources.filter((source): source is Record<string, unknown> => Boolean(source) && typeof source === "object" && !Array.isArray(source)) : [], model: nullableString(row.model), createdByUserId: String(row.created_by_user_id), createdAt: date(row.created_at), updatedAt: date(row.updated_at) };
 }
 function operationFromRow(row: Row): AiOperation {
   return { id: String(row.id), userId: String(row.user_id), investigationId: String(row.investigation_id), stage: row.stage as AiOperationStage, idempotencyKey: String(row.idempotency_key), model: String(row.model), status: row.status as AiOperationStatus, providerRequestId: nullableString(row.provider_request_id), errorCode: nullableString(row.error_code), createdAt: date(row.created_at), updatedAt: date(row.updated_at) };
@@ -120,6 +123,7 @@ export class PostgresJournolRepository implements JournolRepository {
     );
     return result.rows[0] ? leadFromRow(result.rows[0]) : null;
   }
+  async getLatestLeadForInvestigation(investigationId: Id) { const result = await this.pool.query("SELECT * FROM investigative_leads WHERE investigation_id = $1 ORDER BY version DESC LIMIT 1", [investigationId]); return result.rows[0] ? leadFromRow(result.rows[0]) : null; }
 
   async getLead(id: Id) { const result = await this.pool.query("SELECT * FROM investigative_leads WHERE id = $1", [id]); return result.rows[0] ? leadFromRow(result.rows[0]) : null; }
   async approveLead(id: Id, approvedByUserId: Id) {
@@ -175,6 +179,25 @@ export class PostgresJournolRepository implements JournolRepository {
     } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
   }
   async getInvestigationPlan(id: Id) { const result = await this.pool.query("SELECT * FROM investigation_plans WHERE id = $1", [id]); return result.rows[0] ? planFromRow(result.rows[0]) : null; }
+  async createDeepResearchReport(input: CreateDeepResearchReportInput) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [input.investigationId]);
+      const version = await client.query("SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM deep_research_reports WHERE investigation_id = $1", [input.investigationId]);
+      const result = await client.query("INSERT INTO deep_research_reports (id, investigation_id, source_article_id, version, instructions, input_snapshot_hash, research_plan, report, sources, model, created_by_user_id) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10,$11) RETURNING *", [randomUUID(), input.investigationId, input.sourceArticleId, Number(version.rows[0].next_version), input.instructions, input.inputSnapshotHash, JSON.stringify(input.researchPlan), JSON.stringify(input.report), JSON.stringify(input.sources), input.model, input.createdByUserId]);
+      await client.query("COMMIT");
+      return deepResearchFromRow(result.rows[0]);
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  }
+  async getLatestDeepResearchReport(investigationId: Id) { const result = await this.pool.query("SELECT * FROM deep_research_reports WHERE investigation_id = $1 ORDER BY version DESC LIMIT 1", [investigationId]); return result.rows[0] ? deepResearchFromRow(result.rows[0]) : null; }
+  async getDeepResearchReport(id: Id) { const result = await this.pool.query("SELECT * FROM deep_research_reports WHERE id = $1", [id]); return result.rows[0] ? deepResearchFromRow(result.rows[0]) : null; }
+  async listDeepResearchReportsForInvestigation(investigationId: Id) { const result = await this.pool.query("SELECT * FROM deep_research_reports WHERE investigation_id = $1 ORDER BY version DESC", [investigationId]); return result.rows.map(deepResearchFromRow); }
+  async getDeepResearchReportForSnapshot(investigationId: Id, sourceArticleId: Id, inputSnapshotHash: string) { const result = await this.pool.query("SELECT * FROM deep_research_reports WHERE investigation_id = $1 AND source_article_id = $2 AND input_snapshot_hash = $3 ORDER BY version DESC LIMIT 1", [investigationId, sourceArticleId, inputSnapshotHash]); return result.rows[0] ? deepResearchFromRow(result.rows[0]) : null; }
+  async saveDeepResearchReportForUser(userId: Id, reportId: Id) { const result = await this.pool.query("INSERT INTO saved_deep_research_reports (user_id, deep_research_report_id) VALUES ($1, $2) ON CONFLICT (user_id, deep_research_report_id) DO UPDATE SET saved_at = saved_deep_research_reports.saved_at RETURNING saved_at", [userId, reportId]); return date(result.rows[0].saved_at); }
+  async unsaveDeepResearchReportForUser(userId: Id, reportId: Id) { const result = await this.pool.query("DELETE FROM saved_deep_research_reports WHERE user_id = $1 AND deep_research_report_id = $2", [userId, reportId]); return result.rowCount === 1; }
+  async isDeepResearchReportSavedForUser(userId: Id, reportId: Id) { const result = await this.pool.query("SELECT 1 FROM saved_deep_research_reports WHERE user_id = $1 AND deep_research_report_id = $2", [userId, reportId]); return result.rowCount === 1; }
+  async listSavedDeepResearchReportsForUser(userId: Id) { const result = await this.pool.query("SELECT r.*, s.saved_at FROM saved_deep_research_reports s JOIN deep_research_reports r ON r.id = s.deep_research_report_id JOIN investigations i ON i.id = r.investigation_id WHERE s.user_id = $1 AND r.created_by_user_id = $1 AND i.owner_user_id = $1 ORDER BY s.saved_at DESC", [userId]); return result.rows.map((row) => ({ report: deepResearchFromRow(row), savedAt: date(row.saved_at) })); }
   async createInvestigationAction(input: CreateActionInput) { const result = await this.pool.query("INSERT INTO investigation_actions (id, investigation_plan_id, position, status, question_or_claim, evidence_sought, possible_source, verification_method, limitations, created_by_user_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *", [randomUUID(), input.investigationPlanId, input.position, input.status, input.questionOrClaim, input.evidenceSought, input.possibleSource, input.verificationMethod, input.limitations, input.createdByUserId]); return actionFromRow(result.rows[0]); }
   async listInvestigationActions(investigationPlanId: Id) { const result = await this.pool.query("SELECT * FROM investigation_actions WHERE investigation_plan_id = $1 ORDER BY position ASC", [investigationPlanId]); return result.rows.map(actionFromRow); }
   async findAiOperation(userId: Id, idempotencyKey: string) { const result = await this.pool.query("SELECT * FROM ai_operations WHERE user_id = $1 AND idempotency_key = $2", [userId, idempotencyKey]); return result.rows[0] ? operationFromRow(result.rows[0]) : null; }

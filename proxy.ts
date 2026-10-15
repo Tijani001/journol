@@ -9,7 +9,14 @@ const isProtectedPage = createRouteMatcher(["/", "/workspace(.*)"]);
 const isAuthenticationPage = createRouteMatcher(["/sign-in(.*)", "/sign-up(.*)"]);
 
 const clerkProxy = clerkMiddleware(async (auth, request) => {
-  if (isProtectedPage(request)) await auth.protect();
+  if (isProtectedPage(request)) {
+    const { userId, redirectToSignIn } = await auth();
+    // `auth.protect()` can intentionally produce Clerk's protective 404 for
+    // signed-out browser requests. Journol has a branded sign-in route, so
+    // send visitors there explicitly while leaving every API handler to apply
+    // its own JSON authorization contract.
+    if (!userId) return redirectToSignIn({ returnBackUrl: request.url });
+  }
 
   if (isAuthenticationPage(request)) {
     const { userId } = await auth();

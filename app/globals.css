@@ -52,7 +52,9 @@
   font-weight: 800;
 }
 
-.interaction-feedback p { margin: 0; padding-top: 1px; }
+.interaction-feedback > div { min-width: 0; }
+.interaction-feedback strong { display: block; color: #302f47; font-size: 12px; font-weight: 800; }
+.interaction-feedback p { margin: 1px 0 0; padding-top: 1px; font-weight: 600; }
 .interaction-feedback button {
   min-width: 24px;
   min-height: 24px;
@@ -70,6 +72,8 @@
 .interaction-feedback-success > span { background: #eaf8ef; color: #177b43; }
 .interaction-feedback-error { border-color: #f2d6d5; }
 .interaction-feedback-error > span { background: #fff0ef; color: #b42318; }
+.interaction-feedback-warning { border-color: #ebddba; background: #fffdf8; }
+.interaction-feedback-warning > span { background: #fff3d8; color: #9a6515; }
 
 button:not(:disabled),
 [role="button"]:not([aria-disabled="true"]) {

@@ -9,7 +9,7 @@ export type Timestamp = Date;
 export type UserRole = "journalist" | "administrator";
 export type InvestigationStatus = "active" | "archived" | "closed";
 export type LeadStatus = "proposed" | "approved" | "rejected" | "superseded";
-export type AiOperationStage = "lead_selection" | "evidence_assessment" | "investigation_plan";
+export type AiOperationStage = "lead_selection" | "evidence_assessment" | "investigation_plan" | "deep_research";
 export type AiOperationStatus = "pending" | "succeeded" | "failed" | "cancelled";
 export type UsageStatus = "reserved" | "succeeded" | "failed" | "rejected";
 export type ActionStatus = "not_started" | "in_progress" | "completed" | "blocked";
@@ -114,6 +114,23 @@ export interface InvestigationPlan {
   evidenceAssessmentId: Id;
   version: number;
   content: Record<string, unknown>;
+  model: string | null;
+  createdByUserId: Id;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+/** A source-attributed, optional research report beyond the original article. */
+export interface DeepResearchReport {
+  id: Id;
+  investigationId: Id;
+  sourceArticleId: Id;
+  version: number;
+  instructions: string | null;
+  inputSnapshotHash: string;
+  researchPlan: Record<string, unknown>;
+  report: Record<string, unknown>;
+  sources: Array<Record<string, unknown>>;
   model: string | null;
   createdByUserId: Id;
   createdAt: Timestamp;

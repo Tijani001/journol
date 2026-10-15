@@ -1,8 +1,9 @@
 "use client";
 
 export type InteractionFeedbackMessage = {
-  kind: "success" | "error" | "info";
+  kind: "success" | "error" | "warning" | "info";
   message: string;
+  title?: string;
 };
 
 export function ActionSpinner({ label = "Working" }: { label?: string }) {
@@ -28,8 +29,11 @@ export function InteractionFeedback({
       role={feedback.kind === "error" ? "alert" : "status"}
       aria-live={feedback.kind === "error" ? "assertive" : "polite"}
     >
-      <span>{feedback.kind === "success" ? "✓" : feedback.kind === "error" ? "!" : "i"}</span>
-      <p>{feedback.message}</p>
+      <span>{feedback.kind === "success" ? "✓" : feedback.kind === "error" ? "!" : feedback.kind === "warning" ? "!" : "i"}</span>
+      <div>
+        {feedback.title && <strong>{feedback.title}</strong>}
+        <p>{feedback.message}</p>
+      </div>
       <button type="button" onClick={onDismiss} aria-label="Dismiss message">
         ×
       </button>

@@ -2,12 +2,14 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
-import { readApiResponse } from "@/lib/client/api";
+import { JournolApiError, readApiResponse } from "@/lib/client/api";
+import { journalistMessageForUnexpectedFailure, type JournalistMessage } from "@/lib/client/journalist-messages";
 import { AuthControls } from "@/app/auth-controls";
 import { useAuthenticationReadiness } from "@/app/auth-readiness";
 import { ActionSpinner, InteractionFeedback, type InteractionFeedbackMessage } from "@/app/interaction-feedback";
 import { contextualSuggestions, filterArticles } from "@/lib/news-discovery";
 import { countActiveFilters, nextFilterPopoverState, toggleFilterSelection } from "@/lib/editorial-radar-filters";
+import { DEEP_RESEARCH_SOURCE_REQUIRED_MESSAGE, nextDeepResearchPanelState, persistedSourceState } from "@/lib/deep-research-ui";
 import { normalizeStoryUrl } from "@/lib/story-url";
 type NewsArticle = {
   id: string;
@@ -41,6 +43,10 @@ type EvidenceItem = { evidence: string; purpose: string; possibleSource: string 
 type VerificationItem = { action: string; evidenceSought: string; source: string; claimTested: string; method: string; possibleFindings: string; nextStep: string };
 type LimitationItem = { issue: string; whyItMatters: string; howToResolve: string; ifUnresolved: string };
 type InvestigationPlan = { approvedLead: string; investigativeObjective: string; firstAction: string; knownInformation: PlanItem[]; keyQuestions: string[]; evidenceRequirements: EvidenceItem[]; verificationPlan: VerificationItem[]; alternativeExplanations: string[]; limitations: LimitationItem[]; editorialSafeguards: string[]; confidence: { investigability: string; startingEvidence: string; explanation: string }; confidenceExplanation?: string };
+type ResearchSource = { id: string; title: string; url: string; publisher: string | null; publishedAt: string | null; snippet: string; sourceType?: string; evidenceMode?: string; limitations?: string[]; likelyRepeatedSourceIds?: string[]; institutionCategory?: string; contentRole?: string; originatingClaimSourceId?: string | null };
+type ResearchFinding = { claim?: string; finding?: string; summary?: string; opportunity?: string; investigativeQuestion?: string; whyItMatters?: string; existingEvidence?: string; evidenceGaps?: string; recordsToObtain?: string; recordAccessibility?: string; accessibilityRationale?: string; peopleOrInstitutionsToContact?: string; suggestedReportingSteps?: string[]; verificationRequirements?: string; potentialObstacles?: string; safetyEthicalLegalConcerns?: string; qualification?: string; date?: string; location?: string; evidenceStatus?: string; alignmentStatus?: string; evidenceExplanation?: string; sourceIds: string[] };
+type DeepResearchReport = { id: string; investigationId?: string; sourceArticleId?: string; version?: number; instructions: string | null; researchPlan: Record<string, unknown>; report: Record<string, unknown>; sources: ResearchSource[]; createdAt: string };
+type SavedResearchRecord = { report: DeepResearchReport; savedAt: string; investigation: { id: string; title: string } | null; source: { id: string; title: string | null; publisher: string | null; originalUrl: string } | null };
 type SavedStoryRecord = { id: string; canonicalUrl: string; originalUrl: string; title: string; publisher: string | null; publishedAt: string | null; description: string | null; savedAt: string };
 
 
@@ -336,8 +342,41 @@ const navigation = [
 
 const workspace = [
   { label: "Saved stories", icon: "♡" },
+  { label: "Saved research", icon: "⌁" },
   { label: "Saved investigations", icon: "◎" },
 ];
+
+function stringItems(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function researchItems(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is ResearchFinding => typeof item === "object" && item !== null && !Array.isArray(item) && Array.isArray((item as Record<string, unknown>).sourceIds)).map((item) => item as ResearchFinding) : [];
+}
+
+function summaryParagraphs(value: unknown) {
+  return typeof value === "string"
+    ? value.split(/\n\s*\n+/).map((paragraph) => paragraph.trim()).filter(Boolean)
+    : [];
+}
+
+function researchItemText(item: ResearchFinding) {
+  return item.claim || item.investigativeQuestion || item.summary || item.finding || item.opportunity || "No finding was established.";
+}
+
+function objectItems(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null && !Array.isArray(item)) : [];
+}
+
+function ResearchCitations({ sourceIds, sources }: { sourceIds: string[]; sources: ResearchSource[] }) {
+  const byId = new Map(sources.map((source) => [source.id, source]));
+  const cited = sourceIds.map((id) => byId.get(id)).filter((source): source is ResearchSource => Boolean(source));
+  if (!cited.length) return null;
+  return <p className="research-citations" aria-label="Sources">{cited.map((source, index) => {
+    const citation = sources.findIndex((candidate) => candidate.id === source.id) + 1;
+    return <a key={source.id} href={source.url} target="_blank" rel="noreferrer" aria-label={`Source ${citation}: ${source.title}`}>[{citation || index + 1}]</a>;
+  })}</p>;
+}
 
 function useBrowserSearchParam(name: string) {
   const search = useSyncExternalStore(
@@ -362,6 +401,7 @@ const [newsError, setNewsError] = useState("");
   // stale URL parameter from the previously viewed article.
   const currentInvestigationId = createdInvestigationId || investigationId;
   const [investigationSourceUrl, setInvestigationSourceUrl] = useState<string | null>(null);
+  const [sourceArticleId, setSourceArticleId] = useState<string | null>(null);
   const [activePlanInvestigationId, setActivePlanInvestigationId] = useState<string | null>(null);
   const requestedView = useBrowserSearchParam("view");
   const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
@@ -376,6 +416,8 @@ const [newsError, setNewsError] = useState("");
   const workflowRequestId = useRef(0);
   const savedListRequestId = useRef(0);
   const savedStoryListRequestId = useRef(0);
+  const savedResearchListRequestId = useRef(0);
+  const researchSavedStatusRequestId = useRef(0);
   const storySaveRequests = useRef(new Set<string>());
   const planOpenRequestId = useRef(0);
   const filtersPopoverRef = useRef<HTMLDivElement | null>(null);
@@ -426,6 +468,7 @@ const [newsError, setNewsError] = useState("");
   }, [filtersOpen]);
   const [activeNav, setActiveNav] = useState("Discover");
   const showingSavedInvestigations = activeNav === "Saved investigations" || requestedView === "saved";
+  const showingSavedResearch = activeNav === "Saved research";
   const [savedStories, setSavedStories] = useState<SavedStoryRecord[] | null>(null);
   const [savingStoryUrls, setSavingStoryUrls] = useState<string[]>([]);
   const [search, setSearch] = useState("");
@@ -444,11 +487,29 @@ const [newsError, setNewsError] = useState("");
   const [retrievedArticleText, setRetrievedArticleText] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisError, setAnalysisError] = useState("");
+  const [deepResearch, setDeepResearch] = useState<DeepResearchReport | null>(null);
+  const [deepResearchInstructions, setDeepResearchInstructions] = useState("");
+  const [deepResearchOpen, setDeepResearchOpen] = useState(false);
+  const [showDeepResearchForm, setShowDeepResearchForm] = useState(false);
+  const [isDeepResearching, setIsDeepResearching] = useState(false);
+  const [deepResearchError, setDeepResearchError] = useState<JournalistMessage | null>(null);
+  const [researchContentsOpen, setResearchContentsOpen] = useState(false);
+  const [savedResearch, setSavedResearch] = useState<SavedResearchRecord[] | null>(null);
+  const [researchSaved, setResearchSaved] = useState(false);
+  const [savingResearch, setSavingResearch] = useState(false);
   const [interactionFeedback, setInteractionFeedback] = useState<InteractionFeedbackMessage | null>(null);
   const analysisRequestId = useRef(0);
 
-  const showFeedback = (kind: InteractionFeedbackMessage["kind"], message: string) => {
-    setInteractionFeedback({ kind, message });
+  const showFeedback = (kind: InteractionFeedbackMessage["kind"], message: string, title?: string) => {
+    setInteractionFeedback({ kind, message, title });
+  };
+  const journalistMessageFromError = (error: unknown, fallback = journalistMessageForUnexpectedFailure()) => error instanceof JournolApiError
+    ? error.journalistMessage
+    : fallback;
+  const showJournalistError = (error: unknown, fallback?: JournalistMessage) => {
+    const message = journalistMessageFromError(error, fallback);
+    showFeedback(message.kind, message.detail, message.title);
+    return message;
   };
 
   useEffect(() => {
@@ -468,6 +529,9 @@ const [newsError, setNewsError] = useState("");
       setInvestigationPlan(null);
       setProposedLead(null);
       setLeadApproved(false);
+      setDeepResearch(null);
+      setShowDeepResearchForm(false);
+      setSourceArticleId(null);
       try {
         const response = await fetch(`/api/investigations/${encodeURIComponent(persistedInvestigationId)}`, { cache: "no-store" });
         const data = await readApiResponse(response, "Loading investigation state");
@@ -480,16 +544,31 @@ const [newsError, setNewsError] = useState("");
           setProposedLead({ ...(lead.content as Record<string, unknown>), leadId: lead.id } as LeadProposal);
           setLeadApproved(lead.status === "approved");
         }
-        const source = data.source as Record<string, unknown> | null;
-        setInvestigationSourceUrl(typeof source?.originalUrl === "string" ? source.originalUrl : null);
+        const persistedSource = persistedSourceState(data.source);
+        // A new investigation is loaded before article retrieval and lead
+        // persistence complete. Do not let that earlier, empty response erase
+        // the source that the active analysis has just safely stored.
+        if (persistedSource) {
+          setInvestigationSourceUrl(persistedSource.originalUrl);
+          setSourceArticleId(persistedSource.sourceArticleId);
+        }
         if (plan?.content && typeof plan.content === "object") {
           setInvestigationPlan(plan.content as InvestigationPlan);
           setActivePlanInvestigationId(persistedInvestigationId);
         }
         setInvestigationSaved(data.saved === true);
+        const savedResearch = workflow.deepResearch;
+        if (savedResearch && typeof savedResearch === "object" && !Array.isArray(savedResearch)) {
+          setDeepResearch(savedResearch as DeepResearchReport);
+        }
       } catch (error) {
         if (!cancelled && requestId === workflowRequestId.current) {
-          setInvestigationError(error instanceof Error ? error.message : "Unable to load the investigation state.");
+          const message = journalistMessageFromError(error, {
+            title: "Investigation unavailable",
+            detail: "This investigation couldn’t be opened. It may have been removed or may no longer be accessible.",
+            kind: "error",
+          });
+          setInvestigationError(message.detail);
         }
       }
     }
@@ -516,11 +595,21 @@ const [newsError, setNewsError] = useState("");
     }
   };
 
+  const refreshSavedResearch = async () => {
+    const requestId = ++savedResearchListRequestId.current;
+    const response = await fetch("/api/research/saved", { cache: "no-store" });
+    const data = await readApiResponse(response, "Saved research");
+    if (requestId === savedResearchListRequestId.current) {
+      setSavedResearch(Array.isArray(data.saved) ? data.saved as SavedResearchRecord[] : []);
+    }
+  };
+
   useEffect(() => {
     if (!authenticationLoaded || !isSignedIn) return;
-    if (showingSavedInvestigations || activeNav === "Saved stories") {
+    if (showingSavedInvestigations || activeNav === "Saved stories" || activeNav === "Saved research") {
       void refreshSavedInvestigations().catch(() => setSavedInvestigations([]));
       void refreshSavedStories().catch(() => setSavedStories([]));
+      void refreshSavedResearch().catch(() => setSavedResearch([]));
     }
   }, [showingSavedInvestigations, activeNav, authenticationLoaded, isSignedIn]);
   useEffect(() => {
@@ -529,12 +618,15 @@ const [newsError, setNewsError] = useState("");
       // becoming active. New values are loaded only from private, no-store APIs.
       savedListRequestId.current += 1;
       savedStoryListRequestId.current += 1;
+      savedResearchListRequestId.current += 1;
       setSavedInvestigations(null);
       setSavedStories(null);
+      setSavedResearch(null);
       setInvestigationSaved(false);
-      if (showingSavedInvestigations || activeNav === "Saved stories") {
+      if (showingSavedInvestigations || activeNav === "Saved stories" || activeNav === "Saved research") {
         void refreshSavedInvestigations().catch(() => setSavedInvestigations([]));
         void refreshSavedStories().catch(() => setSavedStories([]));
+        void refreshSavedResearch().catch(() => setSavedResearch([]));
       }
     };
     window.addEventListener("journol-auth-change", handleAuthChange);
@@ -544,6 +636,7 @@ const [newsError, setNewsError] = useState("");
     if (!authenticationLoaded || !isSignedIn) return;
     void refreshSavedInvestigations().catch(() => setSavedInvestigations([]));
     void refreshSavedStories().catch(() => setSavedStories([]));
+    void refreshSavedResearch().catch(() => setSavedResearch([]));
   }, [authenticationLoaded, isSignedIn]);
   const analyzeLead = async (
     lead: Story,
@@ -568,6 +661,11 @@ const [newsError, setNewsError] = useState("");
     setAnalysisError("");
     setAiAnalysis(null);
     setRetrievedArticleText("");
+    setSourceArticleId(null);
+    setDeepResearch(null);
+    setShowDeepResearchForm(false);
+    setDeepResearchOpen(false);
+    setDeepResearchError(null);
     setProposedLead(null);
     setLeadApproved(false);
   setInvestigationPlan(null);
@@ -629,6 +727,14 @@ const [newsError, setNewsError] = useState("");
         if (articleData.sourceArticle && typeof articleData.sourceArticle === "object") {
           const source = articleData.sourceArticle as Record<string, unknown>;
           sourceArticleId = typeof source.id === "string" ? source.id : "";
+          if (isCurrent()) {
+            // Invalidate a hydration request started when this investigation
+            // was empty; its response has no source and would otherwise
+            // overwrite this authoritative retrieval result.
+            workflowRequestId.current += 1;
+            setInvestigationSourceUrl(lead.url);
+            setSourceArticleId(sourceArticleId || null);
+          }
         }
       } else {
         articleRetrievalNote = typeof articleData.error === "string"
@@ -708,9 +814,12 @@ const [newsError, setNewsError] = useState("");
   
   } catch (error) {
   if (isCurrent()) {
-    const message = error instanceof Error ? error.message : "Journol could not analyse this story.";
-    setAnalysisError(message);
-    showFeedback("error", message);
+    const message = showJournalistError(error, {
+      title: "Analysis could not be completed",
+      detail: "Journol couldn’t prepare an investigative lead for this story. Please try again.",
+      kind: "error",
+    });
+    setAnalysisError(message.detail);
   }
   } 
   finally {
@@ -776,9 +885,12 @@ const [newsError, setNewsError] = useState("");
   
       await analyzeLead(submittedStory);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Journol could not analyse this story.";
-      setCustomStoryError(message);
-      showFeedback("error", message);
+      const message = showJournalistError(error, {
+        title: "Analysis could not be completed",
+        detail: "Journol couldn’t prepare an investigative lead for this story. Please try again.",
+        kind: "error",
+      });
+      setCustomStoryError(message.detail);
     } finally {
       setIsSubmittingCustomStory(false);
     }
@@ -795,7 +907,7 @@ const filteredStories = discoverLeads(filterArticles(newsArticles, {
   const suggestedContinents = [...new Set([...selectedContinents, ...suggestedFilters.continents])];
   const suggestedCountries = [...new Set([...selectedCountries, ...suggestedFilters.countries])];
   const activeFilterCount = countActiveFilters(selectedTopics, selectedContinents, selectedCountries);
-  const isDiscoveryView = !showingSavedInvestigations && activeNav !== "Saved stories";
+  const isDiscoveryView = !showingSavedInvestigations && !showingSavedResearch && activeNav !== "Saved stories";
   const clearDiscoveryFilters = () => {
     setSelectedTopics([]);
     setSelectedContinents([]);
@@ -809,6 +921,7 @@ const filteredStories = discoverLeads(filterArticles(newsArticles, {
   };
   const savedInvestigationCount = savedInvestigations?.length ?? 0;
   const savedStoryCount = savedStories?.length ?? 0;
+  const savedResearchCount = savedResearch?.length ?? 0;
   const savedStoriesByUrl = new Map((savedStories ?? []).map((story) => [story.canonicalUrl, story]));
   const savedStoryCards: Story[] = (savedStories ?? []).map((story) => ({
     id: story.id,
@@ -864,9 +977,12 @@ const filteredStories = discoverLeads(filterArticles(newsArticles, {
         showFeedback("success", "Story saved to Your Library.");
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unable to update the saved story.";
-      setLibraryError(message);
-      showFeedback("error", message);
+      const message = showJournalistError(error, {
+        title: "Your Library temporarily unavailable",
+        detail: "Journol couldn’t update Your Library right now. Please try again shortly.",
+        kind: "error",
+      });
+      setLibraryError(message.detail);
     } finally {
       storySaveRequests.current.delete(canonicalUrl);
       setSavingStoryUrls((urls) => urls.filter((url) => url !== canonicalUrl));
@@ -897,9 +1013,12 @@ const filteredStories = discoverLeads(filterArticles(newsArticles, {
         showFeedback("success", "Investigation saved to Your Library.");
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unable to update the saved investigation.";
-      setInvestigationError(message);
-      showFeedback("error", message);
+      const message = showJournalistError(error, {
+        title: "Your Library temporarily unavailable",
+        detail: "Journol couldn’t update Your Library right now. Please try again shortly.",
+        kind: "error",
+      });
+      setInvestigationError(message.detail);
     } finally {
       setSavingInvestigation(false);
     }
@@ -938,17 +1057,112 @@ const filteredStories = discoverLeads(filterArticles(newsArticles, {
       setInvestigationSourceUrl(typeof source?.originalUrl === "string" ? source.originalUrl : null);
       setActivePlanInvestigationId(investigationToOpen);
       setInvestigationSaved(data.saved === true);
+      setSourceArticleId(typeof source?.id === "string" ? source.id : null);
+      const savedResearch = workflow.deepResearch;
+      setDeepResearch(savedResearch && typeof savedResearch === "object" && !Array.isArray(savedResearch) ? savedResearch as DeepResearchReport : null);
+      setShowDeepResearchForm(false);
       setShowLeadDetails(true);
       showFeedback("success", "Saved investigation opened.");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unable to open the saved investigation.";
-      setInvestigationError(message);
-      showFeedback("error", message);
+      const message = showJournalistError(error, {
+        title: "Investigation unavailable",
+        detail: "This investigation couldn’t be opened. It may have been removed or may no longer be accessible.",
+        kind: "error",
+      });
+      setInvestigationError(message.detail);
     } finally {
       if (requestId === planOpenRequestId.current) {
         setOpeningSavedInvestigationId(null);
       }
     }
+  }
+
+  async function startDeepResearch() {
+    const investigationToResearch = activePlanInvestigationId || currentInvestigationId;
+    if (!investigationToResearch || !sourceArticleId) {
+      const message: JournalistMessage = {
+        title: "Original article unavailable",
+        detail: DEEP_RESEARCH_SOURCE_REQUIRED_MESSAGE,
+        kind: "error",
+      };
+      setDeepResearchError(message);
+      showFeedback(message.kind, message.detail, message.title);
+      return;
+    }
+    if (isDeepResearching) return;
+    setIsDeepResearching(true);
+    setDeepResearchError(null);
+    try {
+      const response = await fetch(`/api/investigations/${encodeURIComponent(investigationToResearch)}/deep-research`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sourceArticleId, instructions: deepResearchInstructions }),
+      });
+      const data = await readApiResponse(response, "Deep Research");
+      if (!data.research || typeof data.research !== "object" || Array.isArray(data.research)) {
+        throw new Error("Journol did not return a valid Deep Research report.");
+      }
+      setDeepResearch(data.research as DeepResearchReport);
+      setResearchSaved(false);
+      setShowDeepResearchForm(false);
+      setDeepResearchOpen(true);
+      showFeedback("success", data.reused ? "Your previous Deep Research report is ready." : "Deep Research report completed.");
+    } catch (error) {
+      const message = showJournalistError(error);
+      setDeepResearchError(message);
+    } finally {
+      setIsDeepResearching(false);
+    }
+  }
+
+  useEffect(() => {
+    const investigationToCheck = deepResearch?.investigationId || activePlanInvestigationId || currentInvestigationId;
+    if (!deepResearch?.id || !investigationToCheck || !authenticationLoaded || !isSignedIn) {
+      return;
+    }
+    const requestId = ++researchSavedStatusRequestId.current;
+    let cancelled = false;
+    void fetch(`/api/investigations/${encodeURIComponent(investigationToCheck)}/deep-research/${encodeURIComponent(deepResearch.id)}/save`, { cache: "no-store" })
+      .then((response) => readApiResponse(response, "Saved research status"))
+      .then((data) => {
+        if (!cancelled && requestId === researchSavedStatusRequestId.current) setResearchSaved(data.saved === true);
+      })
+      .catch(() => {
+        if (!cancelled && requestId === researchSavedStatusRequestId.current) setResearchSaved(false);
+      });
+    return () => { cancelled = true; };
+  }, [deepResearch?.id, deepResearch?.investigationId, activePlanInvestigationId, currentInvestigationId, authenticationLoaded, isSignedIn]);
+
+  async function setResearchLibrarySaved(shouldSave: boolean) {
+    const investigationToSave = deepResearch?.investigationId || activePlanInvestigationId || currentInvestigationId;
+    if (!deepResearch?.id || !investigationToSave || savingResearch) return;
+    setSavingResearch(true);
+    try {
+      const response = await fetch(`/api/investigations/${encodeURIComponent(investigationToSave)}/deep-research/${encodeURIComponent(deepResearch.id)}/save`, { method: shouldSave ? "POST" : "DELETE" });
+      const data = await readApiResponse(response, "Saving research");
+      if (data.saved !== shouldSave) throw new Error("Research save state was not confirmed.");
+      setResearchSaved(shouldSave);
+      await refreshSavedResearch();
+      showFeedback("success", shouldSave ? "Your Deep Research report has been saved. You can return to it whenever you need." : "Research removed from Saved Research.", shouldSave ? "Research saved" : "Research removed");
+    } catch (error) {
+      showJournalistError(error, { title: "Research could not be saved", detail: "Journol couldn’t update your saved research. Please try again.", kind: "error" });
+    } finally { setSavingResearch(false); }
+  }
+
+  function toggleDeepResearchPanel() {
+    const next = nextDeepResearchPanelState({
+      isOpen: deepResearchOpen,
+      hasStoredSource: Boolean(sourceArticleId),
+    });
+    setDeepResearchOpen(next.isOpen);
+    const message = next.error ? {
+      title: "Original article unavailable",
+      detail: next.error,
+      kind: "error" as const,
+    } : null;
+    setDeepResearchError(message);
+    if (!next.isOpen) setShowDeepResearchForm(false);
+    if (message) showFeedback(message.kind, message.detail, message.title);
   }
 
   return (
@@ -996,6 +1210,7 @@ const filteredStories = discoverLeads(filterArticles(newsArticles, {
           <span className="nav-icon">{item.icon}</span>
           <span>{item.label}</span>
           {item.label === "Saved stories" && <span className="nav-count">{savedStoryCount}</span>}
+          {item.label === "Saved research" && <span className="nav-count">{savedResearchCount}</span>}
           {item.label === "Saved investigations" && <span className="nav-count">{savedInvestigationCount}</span>}
         </button>
       ))}
@@ -1155,6 +1370,8 @@ style={{
             <h2>
               {showingSavedInvestigations
                 ? "Saved investigations"
+                : showingSavedResearch
+                ? "Saved research"
                 : activeNav === "Saved stories"
                 ? "Your saved stories"
                 : "Stories worth a closer look"}
@@ -1244,7 +1461,24 @@ style={{
           <p className="filter-help">Suggestions are drawn from the current feed and search results. They are keyword-based discovery aids, not verified classifications.</p>
         </>}
         {libraryError && <p className="filter-help" style={{ color: "#b42318" }}>{libraryError}</p>}
-        {showingSavedInvestigations ? (
+        {showingSavedResearch ? (
+          <div className="story-list">
+            {savedResearch === null && <div className="empty-state"><h3>Loading saved research…</h3></div>}
+            {savedResearch?.map((entry) => {
+              const title = entry.source?.title || entry.investigation?.title || "Untitled research";
+              const preview = typeof entry.report.report.executiveSummary === "object" && entry.report.report.executiveSummary && typeof (entry.report.report.executiveSummary as Record<string, unknown>).text === "string" ? (entry.report.report.executiveSummary as Record<string, unknown>).text as string : "Open this saved research report.";
+              return <article className="story-card" key={entry.report.id}>
+                <div className="story-index">⌁</div><div className="story-illustration saved-investigation-illustration" aria-hidden="true"><span className="illustration-symbol">⌁</span></div>
+                <button className="story-main text-left" onClick={() => { setDeepResearch(entry.report); setCreatedInvestigationId(entry.report.investigationId || entry.investigation?.id || null); setSourceArticleId(entry.report.sourceArticleId || entry.source?.id || null); setSelectedLead(entry.source ? { title, source: entry.source.publisher || "Publisher not recorded", url: entry.source.originalUrl, description: "", location: "", time: "", category: "RESEARCH", signal: "", evidence: 0, score: 0, color: "#eef2ff", accent: "#3730a3" } : selectedLead); setResearchSaved(true); setShowLeadDetails(true); setDeepResearchOpen(true); }}>
+                  <div className="story-meta"><span className="category-pill">SAVED RESEARCH</span><span className="meta-dot">·</span><span>{entry.source?.publisher || "Publisher not recorded"}</span><span className="meta-dot">·</span><span>Saved {new Date(entry.savedAt).toLocaleDateString()}</span></div>
+                  <h3>{title}</h3><p className="saved-investigation-preview">{preview}</p>
+                </button>
+                <div className="story-actions"><button className="save-button is-saved" onClick={() => { setDeepResearch(entry.report); setCreatedInvestigationId(entry.report.investigationId || entry.investigation?.id || null); void setResearchLibrarySaved(false); }}>♥ Remove</button></div>
+              </article>;
+            })}
+            {savedResearch?.length === 0 && <div className="empty-state"><span>⌁</span><h3>No saved research</h3><p>Save a Deep Research report to return to it later.</p></div>}
+          </div>
+        ) : showingSavedInvestigations ? (
           <div className="story-list">
             {savedInvestigations === null && <div className="empty-state"><h3>Loading saved investigations…</h3></div>}
             {savedInvestigations?.map((entry) => {
@@ -1532,7 +1766,7 @@ style={{
     )}
 
 <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginTop: "16px" }}>
-  <button
+  {false && <button
     onClick={async () => {
       const validation = proposedLead?.validation;
 
@@ -1682,9 +1916,12 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
         setActivePlanInvestigationId(currentInvestigationId);
         showFeedback("success", "Evidence assessment and investigation plan are ready.");
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Something went wrong while building the investigation plan.";
-        setInvestigationError(message);
-        showFeedback("error", message);
+        const message = showJournalistError(error, {
+          title: "Investigation plan could not be completed",
+          detail: "Journol couldn’t complete this stage of the investigation. Please try again.",
+          kind: "error",
+        });
+        setInvestigationError(message.detail);
       } finally {
         setIsBuildingInvestigation(false);
       }
@@ -1703,7 +1940,7 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
     {isBuildingInvestigation
       ? <><ActionSpinner label="Generating investigation plan" /> Generating…</>
       : leadApproved ? "Retry evidence & plan" : "Approve lead & build plan"}
-  </button>
+  </button>}
 
   <button
     disabled={isAnalyzing || isBuildingInvestigation}
@@ -1729,6 +1966,77 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
   </button>
 </div>
   </div>
+)}
+{(proposedLead || deepResearch) && (
+  <section className="deep-research-panel" aria-labelledby="deep-research-heading">
+    <div className="deep-research-heading">
+      <div>
+        <p>JOURNOL DEEP RESEARCH</p>
+        <h3 id="deep-research-heading">Investigate the wider story</h3>
+        <span>Search external reporting and public material for documented context, comparisons, and unanswered questions.</span>
+      </div>
+      <button
+        type="button"
+        className="deep-research-button"
+        disabled={isDeepResearching}
+        aria-busy={isDeepResearching}
+        aria-expanded={deepResearchOpen}
+        onClick={toggleDeepResearchPanel}
+      >
+        {isDeepResearching ? <><ActionSpinner label="Deep Research in progress" /> Researching…</> : deepResearch ? "View Deep Research" : "Deep Research"}
+      </button>
+    </div>
+    {!sourceArticleId && <p className="research-warning">Deep Research becomes available after Journol has safely retrieved and stored the original article.</p>}
+    {deepResearchOpen && (
+      <div className="deep-research-content">
+        {(!deepResearch || showDeepResearchForm) && <>
+          <label htmlFor="deep-research-instructions">What would you like Journol to investigate further? <span>Optional</span></label>
+          <textarea
+            id="deep-research-instructions"
+            value={deepResearchInstructions}
+            disabled={isDeepResearching}
+            maxLength={2000}
+            onChange={(event) => setDeepResearchInstructions(event.target.value)}
+            placeholder="Find previous incidents, examine historical patterns, investigate government responses, and identify unanswered questions."
+          />
+          <p className="research-help">Journol will search external sources before producing a cited research report. It will not treat search results as verified facts.</p>
+          <button type="button" className="deep-research-button" disabled={isDeepResearching || !sourceArticleId} aria-busy={isDeepResearching} onClick={() => void startDeepResearch()}>
+            {isDeepResearching ? <><ActionSpinner label="Starting Deep Research" /> Researching…</> : deepResearch ? "Generate updated Deep Research" : "Start Deep Research"}
+          </button>
+        </>}
+        {isDeepResearching && <div className="research-progress" role="status"><ActionSpinner label="Researching external sources" /><div><strong>Deep Research is in progress</strong><p>Journol is gathering a small, source-attributed set of external material and comparing it with the original report.</p></div></div>}
+        {deepResearchError && <div className={`research-notice research-notice-${deepResearchError.kind}`} role={deepResearchError.kind === "error" ? "alert" : "status"}><span aria-hidden="true">{deepResearchError.kind === "warning" ? "!" : "!"}</span><div><strong>{deepResearchError.title}</strong><p>{deepResearchError.detail}</p><button type="button" onClick={() => void startDeepResearch()} disabled={isDeepResearching || !sourceArticleId}>Try again</button></div></div>}
+        {deepResearch && <div className="deep-research-report">
+          <div className="research-report-masthead">
+            <button type="button" className="research-back-button" onClick={() => { setDeepResearchOpen(false); setResearchContentsOpen(false); }}>← Back</button>
+            <div><p className="research-report-kicker">RESEARCH BRIEFING</p><h4>Deep Research report</h4><span>{deepResearch.createdAt ? new Date(deepResearch.createdAt).toLocaleString() : "Saved report"}{deepResearch.version ? ` · Version ${deepResearch.version}` : ""}</span></div>
+            <div className="research-toolbar-actions">
+              <button type="button" className="research-update-button" aria-expanded={researchContentsOpen} onClick={() => setResearchContentsOpen((open) => !open)}>Contents</button>
+              <button type="button" className="research-update-button" disabled={savingResearch} aria-busy={savingResearch} onClick={() => void setResearchLibrarySaved(!researchSaved)}>{savingResearch ? <><ActionSpinner label="Saving research" /> Saving…</> : researchSaved ? "♥ Research saved" : "♡ Save Research"}</button>
+              <button type="button" className="research-update-button" disabled={isDeepResearching || !sourceArticleId} onClick={() => { setDeepResearchOpen(false); setShowDeepResearchForm(true); setDeepResearchError(null); }}>Generate updated report</button>
+            </div>
+            {researchContentsOpen && <nav className="research-contents" aria-label="Report contents"><a href="#research-summary" onClick={() => setResearchContentsOpen(false)}>Intelligence Summary</a><a href="#research-findings" onClick={() => setResearchContentsOpen(false)}>Findings</a><a href="#research-timeline" onClick={() => setResearchContentsOpen(false)}>Timeline</a><a href="#research-leads" onClick={() => setResearchContentsOpen(false)}>Leads</a><a href="#research-sources" onClick={() => setResearchContentsOpen(false)}>Sources</a></nav>}
+          </div>
+          {deepResearch.instructions && <p className="research-priority"><strong>Research priorities</strong><span>{deepResearch.instructions}</span></p>}
+          {stringItems(deepResearch.researchPlan.limitations).filter((limitation) => limitation.startsWith("Some external sources could not be retrieved")).map((limitation) => <div className="research-limitation-notice" role="status" key={limitation}><span aria-hidden="true">i</span><div><strong>Research coverage is incomplete</strong><p>{limitation}</p></div></div>)}
+          <section id="research-summary" className="research-report-section research-executive-summary"><p className="research-section-kicker">AT A GLANCE</p><h4>Intelligence Summary</h4>{summaryParagraphs((deepResearch.report.executiveSummary as Record<string, unknown> | undefined)?.text).length ? summaryParagraphs((deepResearch.report.executiveSummary as Record<string, unknown> | undefined)?.text).map((paragraph, index) => <p className="research-summary-copy" key={index}>{paragraph}</p>) : <p className="research-summary-copy">No summary was established.</p>}<ResearchCitations sourceIds={researchItems([deepResearch.report.executiveSummary])[0]?.sourceIds ?? []} sources={deepResearch.sources} /></section>
+          {[
+            ["Key Findings and Evidence Status", "keyFindings"],
+            ["Related Incidents and Comparisons", "relatedIncidents"],
+            ["Patterns and Emerging Trends", "patternsAndTrends"],
+            ["Government and Institutional Responses", "institutionalResponses"],
+            ["Contradictions and Evidence Gaps", "contradictionsAndGaps"],
+          ].map(([heading, key]) => <section id={key === "keyFindings" ? "research-findings" : undefined} className="research-report-section" key={key}><h4>{heading}</h4>{researchItems(deepResearch.report[key]).length ? <ol className="research-finding-list">{researchItems(deepResearch.report[key]).map((item, index) => <li key={index}><p>{researchItemText(item)}</p>{item.evidenceStatus && <span className="research-evidence-status">{item.evidenceStatus}</span>}{item.alignmentStatus && <span className="research-alignment">Excerpt alignment: {item.alignmentStatus.replaceAll("_", " ")}</span>}{item.evidenceExplanation && <em>{item.evidenceExplanation}</em>}{item.date && <span>{item.date}{item.location ? ` · ${item.location}` : ""}</span>}{item.qualification && <em>{item.qualification}</em>}<ResearchCitations sourceIds={item.sourceIds} sources={deepResearch.sources} /></li>)}</ol> : <p className="research-empty">Insufficient source material was found for this section.</p>}</section>)}
+          {objectItems(deepResearch.report.historicalTimeline).length > 0 ? <section id="research-timeline" className="research-report-section"><h4>Historical Background and Timeline</h4><ul className="research-timeline">{objectItems(deepResearch.report.historicalTimeline).map((item, index) => <li key={index}><p>{typeof item.event === "string" ? item.event : "No event was established."}</p><span>{typeof item.period === "string" ? item.period : "Period not established"}{typeof item.location === "string" && item.location ? ` · ${item.location}` : ""}</span>{typeof item.whyItMatters === "string" && <em>{item.whyItMatters}</em>}{typeof item.relationship === "string" && <em>Relationship: {item.relationship}</em>}<ResearchCitations sourceIds={stringItems(item.sourceIds)} sources={deepResearch.sources} /></li>)}</ul></section> : researchItems(deepResearch.report.historicalBackground).length > 0 ? <section id="research-timeline" className="research-report-section"><h4>Historical Background</h4><ol className="research-finding-list">{researchItems(deepResearch.report.historicalBackground).map((item, index) => <li key={index}><p>{researchItemText(item)}</p><ResearchCitations sourceIds={item.sourceIds} sources={deepResearch.sources} /></li>)}</ol></section> : null}
+          {objectItems(deepResearch.report.numericalAnalysis).length > 0 && <section className="research-report-section research-numerical-section"><h4>Numerical and Data Analysis</h4><ul className="research-finding-list">{objectItems(deepResearch.report.numericalAnalysis).map((item, index) => <li key={index}><p>{typeof item.label === "string" ? item.label : "Numerical comparison"}</p>{Array.isArray(item.inputs) && <span>{item.inputs.map((input) => { const value = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {}; return `${typeof value.label === "string" ? value.label : "Input"}: ${typeof value.value === "number" ? value.value : "Not established"}${typeof value.units === "string" ? ` ${value.units}` : ""}`; }).join(" · ")}</span>}{typeof item.calculatedResult === "number" && <strong className="research-calculation">Calculated result: {item.calculatedResult.toLocaleString()}</strong>}{typeof item.assumption === "string" && <em>Assumption: {item.assumption}</em>}{typeof item.interpretation === "string" && <em>{item.interpretation}</em>}<ResearchCitations sourceIds={stringItems(item.sourceIds)} sources={deepResearch.sources} /></li>)}</ul></section>}
+          {(researchItems(deepResearch.report.actionableInvestigativeLeads).length > 0 || researchItems(deepResearch.report.potentialInvestigativeLeads).length > 0) && <section id="research-leads" className="research-report-section research-leads-section"><h4>Actionable Investigative Leads</h4><ol className="research-finding-list">{researchItems(deepResearch.report.actionableInvestigativeLeads).concat(researchItems(deepResearch.report.potentialInvestigativeLeads)).map((item, index) => <li key={index}><p>{researchItemText(item)}</p>{item.whyItMatters && <em>Why it matters: {item.whyItMatters}</em>}{item.existingEvidence && <em>Existing evidence: {item.existingEvidence}</em>}<details><summary>View full reporting plan</summary>{item.evidenceGaps && <em>Evidence gaps: {item.evidenceGaps}</em>}{item.recordsToObtain && <em>Records to obtain: {item.recordsToObtain}</em>}{item.recordAccessibility && <em>Access: {item.recordAccessibility.replaceAll("_", " ")}{item.accessibilityRationale ? ` — ${item.accessibilityRationale}` : ""}</em>}{item.peopleOrInstitutionsToContact && <em>Contact: {item.peopleOrInstitutionsToContact}</em>}{item.suggestedReportingSteps?.map((step, stepIndex) => <em key={stepIndex}>Step {stepIndex + 1}: {step}</em>)}{item.verificationRequirements && <em>Before publication: {item.verificationRequirements}</em>}{item.potentialObstacles && <em>Potential obstacles: {item.potentialObstacles}</em>}{item.safetyEthicalLegalConcerns && <em>Safety and ethics: {item.safetyEthicalLegalConcerns}</em>}</details><ResearchCitations sourceIds={item.sourceIds} sources={deepResearch.sources} /></li>)}</ol></section>}
+          <section className="research-report-section"><h4>Suggested Reporting Questions</h4><ul className="research-question-list">{stringItems(deepResearch.report.suggestedReportingQuestions).map((question, index) => <li key={index}>{question}</li>)}</ul></section>
+          <section className="research-report-section research-limitations-section"><h4>Research Limitations</h4><div className="research-limitation-notice"><span aria-hidden="true">i</span><div><strong>Limited supporting evidence</strong><p>Journol found some relevant information, but the available sources do not establish every aspect of this story. Review the supporting evidence and consider further reporting before drawing conclusions.</p></div></div><ul className="research-question-list">{stringItems(deepResearch.report.limitations).map((limitation, index) => <li key={index}>{limitation}</li>)}</ul></section>
+          <section id="research-sources" className="research-report-section research-sources-section"><h4>Sources and References</h4><p className="research-empty">These are retrieved search excerpts, not independently verified records. Open the original source before relying on it for publication.</p><ol className="research-sources">{deepResearch.sources.map((source) => <li key={source.id}><a href={source.url} target="_blank" rel="noreferrer">{source.title}</a><span>{source.publisher || "Publisher not established"}{source.publishedAt ? ` · ${source.publishedAt}` : ""}{source.institutionCategory ? ` · ${source.institutionCategory}` : source.sourceType ? ` · ${source.sourceType.replaceAll("_", " ")}` : ""}</span>{source.contentRole && <em>{source.contentRole}</em>}<details><summary>View excerpt</summary><p>{source.snippet}</p>{source.likelyRepeatedSourceIds?.length ? <em>May repeat reporting represented by {source.likelyRepeatedSourceIds.join(", ")}.</em> : null}{source.limitations?.map((limitation, index) => <em key={index}>{limitation}</em>)}</details></li>)}</ol></section>
+        </div>}
+      </div>
+    )}
+  </section>
 )}
 {isBuildingInvestigation && (
 
@@ -3799,6 +4107,217 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       line-height: 1.9;
     }
 
+    .deep-research-panel {
+      margin-top: 22px;
+      padding: 22px;
+      border: 1px solid #dfdef4;
+      border-radius: 12px;
+      background: #fbfbff;
+    }
+    .deep-research-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+    }
+    .deep-research-heading p { margin: 0 0 6px; color: #6562c8; font-size: 9px; font-weight: 800; letter-spacing: 1px; }
+    .deep-research-heading h3 { margin: 0; color: #373650; font: 800 17px/1.35 "Manrope", sans-serif; }
+    .deep-research-heading span { display: block; max-width: 600px; margin-top: 6px; color: #75748a; font-size: 12px; line-height: 1.7; }
+    .deep-research-button {
+      display: inline-flex;
+      min-height: 38px;
+      flex: 0 0 auto;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 9px 13px;
+      border: 1px solid #5b5bc7;
+      border-radius: 7px;
+      background: #5b5bc7;
+      color: #fff;
+      font: 700 10px/1 "Manrope", sans-serif;
+      cursor: pointer;
+    }
+    .deep-research-button:hover { background: #49499f; border-color: #49499f; }
+    .deep-research-button:focus-visible { outline: 3px solid #bdbbff; outline-offset: 2px; }
+    .deep-research-button:disabled { cursor: not-allowed; opacity: 0.58; }
+    .deep-research-content { margin-top: 18px; padding-top: 18px; border-top: 1px solid #e7e6f4; }
+    .deep-research-content label { display: block; color: #54536b; font-size: 12px; font-weight: 700; }
+    .deep-research-content label span { color: #9796aa; font-weight: 500; }
+    .deep-research-content textarea { box-sizing: border-box; width: 100%; min-height: 106px; margin: 9px 0; padding: 12px; resize: vertical; border: 1px solid #dad9e8; border-radius: 8px; color: #34334b; font: 13px/1.65 "Manrope", sans-serif; }
+    .deep-research-content textarea:focus { outline: 3px solid #e3e2ff; border-color: #7775c9; }
+    .research-help, .research-warning { color: #76758a; font-size: 11px; line-height: 1.7; }
+    .research-warning { margin: 14px 0 0; color: #8b6f32; }
+    .research-progress { display: flex; gap: 11px; align-items: flex-start; margin-top: 16px; padding: 14px; border-radius: 8px; background: #f0efff; color: #5654a9; }
+    .research-progress p { margin: 4px 0 0; color: #6e6c95; font-size: 12px; line-height: 1.65; }
+    .research-notice {
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      margin-top: 14px;
+      padding: 14px;
+      border: 1px solid #f0d3d0;
+      border-radius: 9px;
+      background: #fff8f7;
+      color: #7e332c;
+      font-size: 12px;
+    }
+    .research-notice > span { display: grid; width: 18px; height: 18px; flex: 0 0 auto; place-items: center; border-radius: 50%; background: #fde9e6; color: #a2342b; font-weight: 800; }
+    .research-notice strong { display: block; color: #7e332c; font-size: 12px; }
+    .research-notice p { margin: 4px 0 10px; line-height: 1.6; }
+    .research-notice button { padding: 7px 10px; border: 1px solid #e5b9b4; border-radius: 6px; background: #fff; color: #8a342d; font-weight: 700; cursor: pointer; }
+    .research-notice-warning { border-color: #eadab3; background: #fffdf7; color: #6f592e; }
+    .research-notice-warning > span { background: #fff0ce; color: #94621a; }
+    .research-notice-warning strong { color: #725517; }
+    .research-limitation-notice { display: flex; gap: 10px; align-items: flex-start; margin: 0 0 14px; padding: 13px 15px; border: 1px solid #e7dfc9; border-radius: 10px; background: #fffdf8; color: #665f52; font-size: 12px; line-height: 1.65; }
+    .research-limitation-notice > span { color: #8b6b2e; font-weight: 800; }
+    .research-limitation-notice strong { display: block; color: #5f5132; }
+    .research-limitation-notice p { margin: 2px 0 0; }
+    .deep-research-report {
+      max-width: 980px;
+      margin: 26px auto 0;
+      color: #39384d;
+    }
+    .research-report-masthead {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 16px;
+      padding: 0 3px;
+    }
+    .research-report-masthead > div { display: grid; gap: 3px; }
+    .research-report-kicker, .research-section-kicker {
+      margin: 0;
+      color: #625fbe;
+      font: 800 9px/1.2 "Manrope", sans-serif;
+      letter-spacing: 1.15px;
+      text-transform: uppercase;
+    }
+    .research-report-masthead h4 {
+      margin: 0;
+      color: #29283e;
+      font: 800 20px/1.25 "Manrope", sans-serif;
+    }
+    .research-report-masthead span { color: #828094; font-size: 11px; }
+    .research-update-button { flex: 0 0 auto; padding: 8px 10px; border: 1px solid #d4d2ec; border-radius: 7px; background: #fff; color: #5654ac; font: 700 10px/1 "Manrope", sans-serif; cursor: pointer; }
+    .research-update-button:hover { border-color: #7775c9; background: #f5f4ff; }
+    .research-update-button:focus-visible { outline: 3px solid #bdbbff; outline-offset: 2px; }
+    .research-update-button:disabled { cursor: not-allowed; opacity: .6; }
+    .research-priority {
+      display: grid;
+      gap: 4px;
+      margin: 0 0 16px;
+      padding: 13px 15px;
+      border: 1px solid #e3e1f6;
+      border-radius: 10px;
+      background: #f7f6ff;
+      color: #595873;
+      font-size: 12px;
+      line-height: 1.7;
+    }
+    .research-priority strong { color: #4e4ba1; font-size: 10px; letter-spacing: .4px; text-transform: uppercase; }
+    .research-report-section {
+      margin-top: 14px;
+      padding: 24px 26px;
+      border: 1px solid #e5e4ed;
+      border-radius: 13px;
+      background: #fff;
+      box-shadow: 0 4px 16px rgba(43, 42, 78, .035);
+    }
+    .research-executive-summary {
+      margin-top: 0;
+      border-color: #dcdaf4;
+      background: linear-gradient(135deg, #fff 0%, #fafaff 100%);
+    }
+    .deep-research-report h4 { margin: 0 0 12px; color: #302f47; font: 800 17px/1.38 "Manrope", sans-serif; letter-spacing: -.15px; }
+    .research-executive-summary h4 { margin-top: 6px; font-size: 19px; }
+    .deep-research-report p, .deep-research-report li { color: #5d5c70; font-size: 14px; line-height: 1.8; }
+    .research-summary-copy {
+      max-width: 78ch;
+      margin: 0;
+      color: #414055 !important;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 17px !important;
+      line-height: 1.75 !important;
+    }
+    .deep-research-report ul { display: grid; gap: 11px; margin: 0; padding: 0; list-style: none; }
+    .research-finding-list > li, .research-question-list > li, .research-timeline > li {
+      position: relative;
+      padding: 15px 17px 15px 19px;
+      border: 1px solid #ebeaf1;
+      border-radius: 9px;
+      background: #fcfcfe;
+    }
+    .research-finding-list > li::before, .research-question-list > li::before, .research-timeline > li::before {
+      position: absolute;
+      top: 18px;
+      left: 0;
+      width: 3px;
+      height: 24px;
+      border-radius: 0 3px 3px 0;
+      background: #7774cc;
+      content: "";
+    }
+    .research-timeline > li::before { background: #4f9a92; }
+    .research-leads-section .research-finding-list > li::before { background: #b77a35; }
+    .research-limitations-section .research-question-list > li::before { background: #a27b76; }
+    .deep-research-report li > p { margin: 0; color: #414054; font-weight: 650; }
+    .deep-research-report li > span, .deep-research-report li > em { display: block; margin-top: 5px; color: #77768c; font-size: 12px; font-style: normal; line-height: 1.6; }
+    .research-evidence-status { display: inline-block !important; width: fit-content; margin-top: 7px !important; padding: 3px 7px; border: 1px solid #d8d6ee; border-radius: 99px; background: #f5f4ff; color: #555388 !important; font-size: 10px !important; font-weight: 800; letter-spacing: .35px; }
+    .research-alignment { display: block; margin-top: 6px; color: #77758c; font-size: 10px; font-weight: 700; text-transform: capitalize; }
+    .research-calculation { display: block; margin-top: 9px; color: #454365; font-size: 13px; }
+    .research-citations { margin: 7px 0 0 !important; color: #7472a1 !important; font-size: 10px !important; }
+    .research-citations a, .research-sources a { color: #4846a6; text-decoration: underline; text-underline-offset: 2px; }
+    .research-empty { margin: 0; color: #78778c !important; font-size: 12px !important; line-height: 1.7 !important; }
+    .research-sources { padding-left: 0 !important; list-style: none; }
+    .research-sources li { padding: 15px 16px; border: 1px solid #e7e6ef; border-radius: 9px; background: #fbfbfd; }
+    .research-sources a { display: block; color: #373590; font-weight: 800; line-height: 1.5; }
+    .research-sources span { display: block; margin-top: 5px; color: #77768a; font-size: 11px; }
+    .research-sources p { margin: 9px 0 0; color: #666579 !important; font-size: 12px !important; line-height: 1.7 !important; }
+
+    /* The report is a document, not a dashboard panel. The configuration form
+       remains inline; a completed report becomes a dedicated reading surface. */
+    .deep-research-content:has(.deep-research-report) {
+      position: fixed;
+      z-index: 100001;
+      inset: 0;
+      overflow-y: auto;
+      margin: 0;
+      padding: max(20px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right)) max(40px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
+      border: 0;
+      background: #fcfcfd;
+    }
+    .deep-research-content:has(.deep-research-report) > :not(.deep-research-report) { display: none; }
+    .deep-research-content:has(.deep-research-report) .deep-research-report { max-width: 720px; margin: 0 auto; padding: 0 0 64px; }
+    .deep-research-content:has(.deep-research-report) .research-report-masthead { position: sticky; z-index: 2; top: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 16px; margin: 0 -18px 38px; padding: 14px 18px; border-bottom: 1px solid #e6e5ec; background: rgba(252,252,253,.96); backdrop-filter: blur(10px); }
+    .research-back-button { border: 0; background: transparent; color: #4b499f; font: 700 13px/1 "Manrope", sans-serif; cursor: pointer; }
+    .research-toolbar-actions { display: flex !important; justify-content: flex-end; flex-wrap: wrap; gap: 7px; }
+    .research-contents { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px 14px; padding-top: 4px; }
+    .research-contents a { color: #4b499f; font: 700 12px/1.4 "Manrope", sans-serif; text-decoration: none; }
+    .deep-research-content:has(.deep-research-report) .research-report-masthead h4 { font-size: clamp(26px, 4vw, 36px); letter-spacing: -.8px; }
+    .deep-research-content:has(.deep-research-report) .research-report-section { margin-top: 42px; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+    .deep-research-content:has(.deep-research-report) .research-executive-summary { margin-top: 0; background: transparent; }
+    .deep-research-content:has(.deep-research-report) .deep-research-report h4 { margin-bottom: 16px; font-size: clamp(22px, 3vw, 26px); line-height: 1.3; }
+    .deep-research-content:has(.deep-research-report) .deep-research-report p,
+    .deep-research-content:has(.deep-research-report) .deep-research-report li { font-size: 16px; line-height: 1.7; }
+    .deep-research-content:has(.deep-research-report) .research-summary-copy { max-width: none; font-size: 17px !important; line-height: 1.75 !important; }
+    .deep-research-content:has(.deep-research-report) .research-finding-list,
+    .deep-research-content:has(.deep-research-report) .research-question-list,
+    .deep-research-content:has(.deep-research-report) .research-timeline { display: grid; gap: 24px; padding-left: 28px; list-style: decimal-leading-zero; }
+    .deep-research-content:has(.deep-research-report) .research-finding-list > li,
+    .deep-research-content:has(.deep-research-report) .research-question-list > li,
+    .deep-research-content:has(.deep-research-report) .research-timeline > li { padding: 0 0 23px 8px; border: 0; border-bottom: 1px solid #e9e8ed; border-radius: 0; background: transparent; }
+    .deep-research-content:has(.deep-research-report) .research-finding-list > li::before,
+    .deep-research-content:has(.deep-research-report) .research-question-list > li::before,
+    .deep-research-content:has(.deep-research-report) .research-timeline > li::before { display: none; }
+    .deep-research-content:has(.deep-research-report) .research-sources { display: grid; gap: 17px; padding-left: 28px !important; list-style: decimal; }
+    .deep-research-content:has(.deep-research-report) .research-sources li { padding: 0 0 18px 4px; border: 0; border-bottom: 1px solid #e9e8ed; border-radius: 0; background: transparent; }
+    .deep-research-content:has(.deep-research-report) details { margin-top: 12px; color: #666579; }
+    .deep-research-content:has(.deep-research-report) summary { cursor: pointer; color: #4b499f; font: 700 14px/1.5 "Manrope", sans-serif; }
+    .deep-research-content:has(.deep-research-report) .research-citations { display: flex; gap: 6px; margin-top: 10px !important; }
+    .deep-research-content:has(.deep-research-report) .research-citations a { display: inline-block; min-width: 30px; min-height: 30px; padding: 5px 6px; border-radius: 5px; background: #f1f0ff; text-align: center; text-decoration: none; }
+
     @media (max-width: 700px) {
       .lead-details-modal {
         width: 100%;
@@ -3809,6 +4328,24 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       .investigation-plan {
         padding: 24px 18px;
       }
+      .deep-research-panel { padding: 17px; }
+      .deep-research-content:has(.deep-research-report) { padding: max(15px, env(safe-area-inset-top)) 16px max(32px, env(safe-area-inset-bottom)); }
+      .deep-research-content:has(.deep-research-report) .research-report-masthead { grid-template-columns: auto 1fr; margin: 0 -16px 28px; padding: 11px 16px; }
+      .deep-research-content:has(.deep-research-report) .research-toolbar-actions { grid-column: 1 / -1; justify-content: flex-start; }
+      .deep-research-content:has(.deep-research-report) .research-update-button { width: auto; min-height: 36px; }
+      .deep-research-content:has(.deep-research-report) .deep-research-report p,
+      .deep-research-content:has(.deep-research-report) .deep-research-report li { font-size: 16px; line-height: 1.7; }
+      .deep-research-content:has(.deep-research-report) .research-summary-copy { font-size: 17px !important; }
+      .deep-research-heading { flex-direction: column; gap: 12px; }
+      .deep-research-heading .deep-research-button { width: 100%; }
+      .research-report-masthead { align-items: flex-start; flex-direction: column; gap: 10px; }
+      .research-update-button { width: 100%; min-height: 38px; }
+      .research-report-section { padding: 19px 17px; border-radius: 11px; }
+      .research-report-masthead h4 { font-size: 18px; }
+      .research-executive-summary h4 { font-size: 17px; }
+      .research-summary-copy { font-size: 16px !important; line-height: 1.7 !important; }
+      .deep-research-report p, .deep-research-report li { font-size: 13px; line-height: 1.75; }
+      .research-finding-list > li, .research-question-list > li, .research-timeline > li { padding: 14px 14px 14px 17px; }
 
       .investigation-header {
         flex-direction: column;

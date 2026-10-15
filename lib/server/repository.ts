@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   AiOperation, AiOperationStage, AiOperationStatus, EvidenceAssessment,
-  Id, Investigation, InvestigationAction, InvestigationPlan, InvestigativeLead,
+  DeepResearchReport, Id, Investigation, InvestigationAction, InvestigationPlan, InvestigativeLead,
   SavedStory, SourceArticle, UsageRecord, UsageStatus, User,
 } from "@/lib/domain/types";
 
@@ -12,6 +12,7 @@ export type SaveStoryInput = Pick<SavedStory, "userId" | "canonicalUrl" | "origi
 export type CreateLeadInput = Omit<InvestigativeLead, "id" | "version" | "createdAt" | "updatedAt" | "approvedByUserId" | "approvedAt">;
 export type CreateEvidenceAssessmentInput = Omit<EvidenceAssessment, "id" | "version" | "createdAt" | "updatedAt">;
 export type CreateInvestigationPlanInput = Omit<InvestigationPlan, "id" | "version" | "createdAt" | "updatedAt">;
+export type CreateDeepResearchReportInput = Omit<DeepResearchReport, "id" | "version" | "createdAt" | "updatedAt">;
 export type CreateActionInput = Omit<InvestigationAction, "id" | "createdAt" | "updatedAt">;
 export type CreatePlanWithActionsInput = {
   plan: CreateInvestigationPlanInput;
@@ -44,6 +45,7 @@ export interface JournolRepository {
   investigationHasSource(investigationId: Id, sourceArticleId: Id): Promise<boolean>;
   createLeadVersion(input: CreateLeadInput): Promise<InvestigativeLead>;
   getLatestLeadForSource(investigationId: Id, sourceArticleId: Id): Promise<InvestigativeLead | null>;
+  getLatestLeadForInvestigation(investigationId: Id): Promise<InvestigativeLead | null>;
   getLead(id: Id): Promise<InvestigativeLead | null>;
   approveLead(id: Id, approvedByUserId: Id): Promise<InvestigativeLead | null>;
   rejectLead(id: Id): Promise<InvestigativeLead | null>;
@@ -53,6 +55,15 @@ export interface JournolRepository {
   /** Persists a valid plan and its ordered actions atomically in production. */
   createInvestigationPlanWithActions(input: CreatePlanWithActionsInput): Promise<{ plan: InvestigationPlan; actions: InvestigationAction[] }>;
   getInvestigationPlan(id: Id): Promise<InvestigationPlan | null>;
+  createDeepResearchReport(input: CreateDeepResearchReportInput): Promise<DeepResearchReport>;
+  getDeepResearchReport(id: Id): Promise<DeepResearchReport | null>;
+  getLatestDeepResearchReport(investigationId: Id): Promise<DeepResearchReport | null>;
+  listDeepResearchReportsForInvestigation(investigationId: Id): Promise<DeepResearchReport[]>;
+  getDeepResearchReportForSnapshot(investigationId: Id, sourceArticleId: Id, inputSnapshotHash: string): Promise<DeepResearchReport | null>;
+  saveDeepResearchReportForUser(userId: Id, reportId: Id): Promise<Date>;
+  unsaveDeepResearchReportForUser(userId: Id, reportId: Id): Promise<boolean>;
+  isDeepResearchReportSavedForUser(userId: Id, reportId: Id): Promise<boolean>;
+  listSavedDeepResearchReportsForUser(userId: Id): Promise<Array<{ report: DeepResearchReport; savedAt: Date }>>;
   createInvestigationAction(input: CreateActionInput): Promise<InvestigationAction>;
   listInvestigationActions(investigationPlanId: Id): Promise<InvestigationAction[]>;
   findAiOperation(userId: Id, idempotencyKey: string): Promise<AiOperation | null>;
@@ -80,6 +91,8 @@ export class InMemoryJournolRepository implements JournolRepository {
   private readonly leads = new Map<Id, InvestigativeLead>();
   private readonly assessments = new Map<Id, EvidenceAssessment>();
   private readonly plans = new Map<Id, InvestigationPlan>();
+  private readonly researchReports = new Map<Id, DeepResearchReport>();
+  private readonly savedResearchReports = new Map<string, Date>();
   private readonly actions = new Map<Id, InvestigationAction>();
   private readonly operations = new Map<Id, AiOperation>();
   private readonly usage = new Map<Id, UsageRecord>();
@@ -177,6 +190,10 @@ export class InMemoryJournolRepository implements JournolRepository {
     );
   }
 
+  async getLatestLeadForInvestigation(investigationId: Id) {
+    return [...this.leads.values()].filter((lead) => lead.investigationId === investigationId).sort((a, b) => b.version - a.version)[0] ?? null;
+  }
+
   async getLead(id: Id) { return this.leads.get(id) ?? null; }
 
   async approveLead(id: Id, approvedByUserId: Id) {
@@ -229,6 +246,55 @@ export class InMemoryJournolRepository implements JournolRepository {
   }
 
   async getInvestigationPlan(id: Id) { return this.plans.get(id) ?? null; }
+
+  async createDeepResearchReport(input: CreateDeepResearchReportInput) {
+    const now = new Date();
+    const version = [...this.researchReports.values()].filter((report) => report.investigationId === input.investigationId).length + 1;
+    const report: DeepResearchReport = { id: randomUUID(), ...input, version, createdAt: now, updatedAt: now };
+    this.researchReports.set(report.id, report);
+    return report;
+  }
+
+  async getLatestDeepResearchReport(investigationId: Id) {
+    return [...this.researchReports.values()].filter((report) => report.investigationId === investigationId).sort((a, b) => b.version - a.version)[0] ?? null;
+  }
+
+  async getDeepResearchReport(id: Id) { return this.researchReports.get(id) ?? null; }
+
+  async listDeepResearchReportsForInvestigation(investigationId: Id) {
+    return [...this.researchReports.values()]
+      .filter((report) => report.investigationId === investigationId)
+      .sort((a, b) => b.version - a.version);
+  }
+
+  async getDeepResearchReportForSnapshot(investigationId: Id, sourceArticleId: Id, inputSnapshotHash: string) {
+    return [...this.researchReports.values()].find((report) => report.investigationId === investigationId && report.sourceArticleId === sourceArticleId && report.inputSnapshotHash === inputSnapshotHash) ?? null;
+  }
+
+  async saveDeepResearchReportForUser(userId: Id, reportId: Id) {
+    const key = `${userId}:${reportId}`;
+    const savedAt = this.savedResearchReports.get(key) ?? new Date();
+    this.savedResearchReports.set(key, savedAt);
+    return savedAt;
+  }
+
+  async unsaveDeepResearchReportForUser(userId: Id, reportId: Id) {
+    return this.savedResearchReports.delete(`${userId}:${reportId}`);
+  }
+
+  async isDeepResearchReportSavedForUser(userId: Id, reportId: Id) {
+    return this.savedResearchReports.has(`${userId}:${reportId}`);
+  }
+
+  async listSavedDeepResearchReportsForUser(userId: Id) {
+    return [...this.savedResearchReports.entries()]
+      .filter(([key]) => key.startsWith(`${userId}:`))
+      .flatMap(([key, savedAt]) => {
+        const report = this.researchReports.get(key.slice(userId.length + 1));
+        return report ? [{ report, savedAt }] : [];
+      })
+      .sort((a, b) => b.savedAt.getTime() - a.savedAt.getTime());
+  }
 
   async createInvestigationAction(input: CreateActionInput) {
     const now = new Date();

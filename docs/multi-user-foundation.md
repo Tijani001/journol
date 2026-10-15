@@ -6,7 +6,7 @@ does **not** provision Redis or change the staged editorial workflow.
 
 ## Domain model
 
-`lib/domain/types.ts` defines the records that will be persisted: users, investigations, source articles, versioned leads, evidence assessments, investigation plans, actions, AI operations and usage records. Each record uses UUIDs and audit timestamps. Leads, assessments and plans are immutable versions rather than mutable model output.
+`lib/domain/types.ts` defines the records that will be persisted: users, investigations, source articles, versioned leads, evidence assessments, investigation plans, actions, optional source-attributed Deep Research reports, AI operations and usage records. Each record uses UUIDs and audit timestamps. Leads, assessments, plans, and research reports are immutable versions rather than mutable model output.
 
 `lib/domain/postgres-schema.ts` is a typed PostgreSQL schema contract. It documents table names, foreign keys, uniqueness constraints and likely indexes without opening a connection or applying a migration. A future Drizzle adapter should implement the same contract rather than leak ORM types into routes or components.
 

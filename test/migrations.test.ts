@@ -24,4 +24,18 @@ describe("initial PostgreSQL migration", () => {
     expect(migration).toContain("UNIQUE (user_id, canonical_url)");
     expect(migration).toContain("saved_stories_user_saved_idx");
   });
+
+  it("adds source-attributed Deep Research without changing applied migrations", async () => {
+    const migration = await readFile(new URL("../db/migrations/0005_deep_research.sql", import.meta.url), "utf8");
+    expect(migration).toContain("CREATE TABLE deep_research_reports");
+    expect(migration).toContain("deep_research_reports_investigation_version_unique");
+    expect(migration).toContain("'deep_research'");
+  });
+
+  it("adds explicit per-user Deep Research bookmarks without replacing report history", async () => {
+    const migration = await readFile(new URL("../db/migrations/0006_saved_deep_research.sql", import.meta.url), "utf8");
+    expect(migration).toContain("CREATE TABLE saved_deep_research_reports");
+    expect(migration).toContain("PRIMARY KEY (user_id, deep_research_report_id)");
+    expect(migration).toContain("saved_deep_research_reports_user_saved_at_idx");
+  });
 });

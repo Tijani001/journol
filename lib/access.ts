@@ -1,8 +1,8 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { apiError } from "@/lib/api";
 
-type RateLimitResult = { allowed: boolean; retryAfterSeconds: number };
-type Entry = { count: number; resetAt: number; active: number };
+type RateLimitResult = { allowed: boolean; retryAfterSeconds: number; reason?: "limit" | "concurrency" | "unavailable" };
+type Entry = { count: number; resetAt: number; active: number; activeUntil?: number };
 type UpstashPipelineEntry = { result?: unknown; error?: unknown };
 
 const memoryStore = new Map<string, Entry>();
@@ -111,6 +111,46 @@ async function sharedLimit(key: string, limit: number, windowSeconds: number): P
   return { allowed: count <= limit, retryAfterSeconds: count <= limit ? 0 : windowSeconds };
 }
 
+const CONCURRENCY_LEASE_SECONDS = 120;
+
+/**
+ * Claims one short-lived shared lease. The value is a per-request token so a
+ * late completion cannot delete a lease acquired by a later request.
+ */
+async function sharedConcurrencyAcquire(key: string, token: string): Promise<"acquired" | "busy" | "unavailable" | null> {
+  try {
+    const configuration = sharedLimiterConfiguration();
+    if (!configuration) return null;
+    const response = await fetch(configuration.url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${configuration.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(["SET", key, token, "NX", "EX", CONCURRENCY_LEASE_SECONDS]),
+      signal: AbortSignal.timeout(2_000),
+    });
+    if (!response.ok) return "unavailable";
+    const result: unknown = await response.json();
+    if (result && typeof result === "object" && "result" in result && (result as { result?: unknown }).result === "OK") return "acquired";
+    return "busy";
+  } catch { return "unavailable"; }
+}
+
+async function sharedConcurrencyRelease(key: string, token: string) {
+  const script = "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end";
+  try {
+    const configuration = sharedLimiterConfiguration();
+    if (!configuration) return;
+    await fetch(`${configuration.url}/pipeline`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${configuration.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify([["EVAL", script, 1, key, token]]),
+      signal: AbortSignal.timeout(2_000),
+    });
+  } catch {
+    // The expiry is the recovery path for a terminated function or a failed
+    // release. A release failure must not affect the completed response.
+  }
+}
+
 export function resetRateLimitStateForTesting() {
   memoryStore.clear();
 }
@@ -119,43 +159,68 @@ export async function limitRequest(
   scope: string,
   subject: string,
   options: { limit: number; windowSeconds: number; concurrency: number },
-): Promise<RateLimitResult & { release: () => void }> {
+): Promise<RateLimitResult & { release: () => Promise<void> }> {
   const key = `journol:${scope}:${subject}`;
+  const concurrencyKey = `${key}:concurrency`;
   // Per-instance memory is not a safe production control: Vercel can serve
   // requests from more than one warm function. Production therefore fails
   // closed until a shared limiter is configured.
   const requireShared =
     process.env.NODE_ENV === "production" ||
     process.env.JOURNOL_REQUIRE_SHARED_RATE_LIMIT === "true";
-  let remote: RateLimitResult | null = null;
-  try {
-    remote = await sharedLimit(key, options.limit, options.windowSeconds);
-  } catch {
-    return { allowed: false, retryAfterSeconds: options.windowSeconds, release: () => {} };
+  const leaseToken = randomUUID();
+  const remoteConcurrency = await sharedConcurrencyAcquire(concurrencyKey, leaseToken);
+  if (remoteConcurrency === "unavailable") {
+    return { allowed: false, retryAfterSeconds: options.windowSeconds, reason: "unavailable", release: async () => {} };
   }
-  if (!remote && requireShared) {
-    return { allowed: false, retryAfterSeconds: options.windowSeconds, release: () => {} };
+  if (remoteConcurrency === "busy") {
+    return { allowed: false, retryAfterSeconds: CONCURRENCY_LEASE_SECONDS, reason: "concurrency", release: async () => {} };
   }
 
   const now = Date.now();
   const entry = memoryStore.get(key);
   const current = !entry || entry.resetAt <= now
-    ? { count: 0, active: 0, resetAt: now + options.windowSeconds * 1_000 }
+    ? { count: 0, active: 0, activeUntil: 0, resetAt: now + options.windowSeconds * 1_000 }
     : entry;
-  current.count += 1;
-  current.active += 1;
-  memoryStore.set(key, current);
+  // Old in-memory entries do not carry a lease timestamp. Treat them as
+  // expired rather than allowing a dev-server refresh to block a journalist.
+  if (!current.activeUntil || current.activeUntil <= now) current.active = 0;
+  if (remoteConcurrency === null && current.active >= options.concurrency) {
+    return { allowed: false, retryAfterSeconds: CONCURRENCY_LEASE_SECONDS, reason: "concurrency", release: async () => {} };
+  }
 
-  const allowed = (remote?.allowed ?? current.count <= options.limit) && current.active <= options.concurrency;
-  const retryAfterSeconds = allowed ? 0 : Math.max(1, Math.ceil((current.resetAt - now) / 1_000));
+  let remote: RateLimitResult | null = null;
+  try {
+    remote = await sharedLimit(key, options.limit, options.windowSeconds);
+  } catch {
+    if (remoteConcurrency === "acquired") await sharedConcurrencyRelease(concurrencyKey, leaseToken);
+    return { allowed: false, retryAfterSeconds: options.windowSeconds, reason: "unavailable", release: async () => {} };
+  }
+  if (!remote && requireShared) {
+    if (remoteConcurrency === "acquired") await sharedConcurrencyRelease(concurrencyKey, leaseToken);
+    return { allowed: false, retryAfterSeconds: options.windowSeconds, reason: "unavailable", release: async () => {} };
+  }
+
+  const nextCount = current.count + 1;
+  const hourlyLimitReached = !(remote?.allowed ?? nextCount <= options.limit);
+  if (hourlyLimitReached) {
+    if (remoteConcurrency === "acquired") await sharedConcurrencyRelease(concurrencyKey, leaseToken);
+    return { allowed: false, retryAfterSeconds: Math.max(1, Math.ceil((current.resetAt - now) / 1_000)), reason: "limit", release: async () => {} };
+  }
+  current.count = nextCount;
+  current.active += 1;
+  current.activeUntil = now + CONCURRENCY_LEASE_SECONDS * 1_000;
+  memoryStore.set(key, current);
   let released = false;
   return {
-    allowed,
-    retryAfterSeconds,
-    release: () => {
+    allowed: true,
+    retryAfterSeconds: 0,
+    release: async () => {
       if (!released) {
         released = true;
         current.active = Math.max(0, current.active - 1);
+        if (current.active === 0) current.activeUntil = 0;
+        if (remoteConcurrency === "acquired") await sharedConcurrencyRelease(concurrencyKey, leaseToken);
       }
     },
   };

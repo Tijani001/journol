@@ -96,6 +96,13 @@ export const JOURNOL_POSTGRES_SCHEMA = {
       created_by_user_id: { type: "uuid", references: "users.id" }, ...auditColumns,
     }, unique: ["investigation_plan_id, position"],
   },
+  deep_research_reports: {
+    primaryKey: ["id"], columns: {
+      id: { type: "uuid" }, investigation_id: { type: "uuid", references: "investigations.id" }, source_article_id: { type: "uuid", references: "source_articles.id" },
+      version: { type: "integer" }, instructions: { type: "text", nullable: true }, input_snapshot_hash: { type: "text" }, research_plan: { type: "jsonb" }, report: { type: "jsonb" }, sources: { type: "jsonb" },
+      model: { type: "text", nullable: true }, created_by_user_id: { type: "uuid", references: "users.id" }, ...auditColumns,
+    }, unique: ["investigation_id, version"], indexes: ["investigation_id, created_at DESC", "investigation_id, source_article_id, input_snapshot_hash"],
+  },
   ai_operations: {
     primaryKey: ["id"], columns: {
       id: { type: "uuid" }, user_id: { type: "uuid", references: "users.id" }, investigation_id: { type: "uuid", references: "investigations.id" },

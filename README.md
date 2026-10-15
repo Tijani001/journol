@@ -38,6 +38,24 @@ The browser now uses the investigation-scoped workflow routes. The older
 backward-compatible, access-guarded legacy handlers while downstream callers
 are retired; new UI work must not call them.
 
+## Deep Research
+
+After Journol has retrieved an article and generated its initial investigative
+lead, journalists can optionally open **Deep Research** in the same lead
+dialogue. It searches a bounded set of external, public result metadata,
+then produces a source-attributed report covering historical context, related
+incidents, evidence status, contradictions, auditable numerical comparisons,
+evidence gaps, and reporting opportunities. It never runs automatically and
+never treats search snippets as verified facts. A matching citation proves
+only that a finding is linked to retrieved material; journalists must inspect
+the original source before treating it as independently established.
+
+Deep Research requires the server-only `TAVILY_API_KEY` in addition to
+`OPENAI_API_KEY`. Without a configured search provider, Journol shows a clear
+configuration message and does not fabricate a research report. Completed
+reports are tied to the authenticated user's investigation and source article,
+and are reused for the same source and research instructions.
+
 For a closed beta, configure Clerk in **Restricted** sign-up mode and invite
 each journalist. The investigation-scoped AI routes use the verified Clerk
 session and server-side ownership checks; no browser-supplied identity or

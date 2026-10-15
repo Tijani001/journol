@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { InMemoryJournolRepository } from "@/lib/server/repository";
 import { requireInvestigationAccess } from "@/lib/server/authorization";
 import { AiOperationService } from "@/lib/server/ai-operations";
@@ -82,6 +82,21 @@ describe("multi-user domain foundation", () => {
     expect(completed).toMatchObject({ reused: true, operation: { id: first.operation.id, status: "succeeded" } });
   });
 
+  it("reclaims an abandoned pending Deep Research operation after its lease expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const repository = new InMemoryJournolRepository();
+      const user = await repository.createUser({ authIssuer: "test", authSubject: "stale-research", email: null });
+      const investigation = await repository.createInvestigation({ ownerUserId: user.id, title: "Stale research" });
+      const service = new AiOperationService(repository);
+      const input = { user, investigationId: investigation.id, stage: "deep_research" as const, idempotencyKey: "deep-research:stale", model: "gpt-test" };
+      const first = await service.begin(input);
+      await vi.advanceTimersByTimeAsync(121_000);
+      const recovered = await service.begin(input);
+      expect(recovered).toMatchObject({ reused: false, operation: { id: first.operation.id, status: "pending" } });
+    } finally { vi.useRealTimers(); }
+  });
+
   it("allows only one concurrent retry to reclaim a failed operation", async () => {
     const repository = new InMemoryJournolRepository();
     const user = await repository.createUser({ authIssuer: "test", authSubject: "concurrent-retry", email: null });
@@ -154,5 +169,38 @@ describe("multi-user domain foundation", () => {
     expect(result.actions).toHaveLength(1);
     expect((await repository.getInvestigation(investigation.id))?.currentPlanId).toBe(result.plan.id);
     await expect(repository.listInvestigationActions(result.plan.id)).resolves.toHaveLength(1);
+  });
+
+  it("persists Deep Research separately from plans and reuses its input snapshot", async () => {
+    const repository = new InMemoryJournolRepository();
+    const user = await repository.createUser({ authIssuer: "test", authSubject: "deep-research", email: null });
+    const investigation = await repository.createInvestigation({ ownerUserId: user.id, title: "Research" });
+    const article = await repository.createSourceArticle({ ownerUserId: user.id, originalUrl: "https://example.test/research", canonicalUrl: null, title: "Report", publisher: "Example", extractedText: "Stored source", contentHash: "research", retrievalStatus: "retrieved", retrievedAt: new Date() });
+    await repository.attachSourceToInvestigation({ investigationId: investigation.id, sourceArticleId: article.id, addedByUserId: user.id });
+    const report = await repository.createDeepResearchReport({ investigationId: investigation.id, sourceArticleId: article.id, instructions: "Find earlier cases", inputSnapshotHash: "snapshot", researchPlan: { queries: ["Report previous incidents"] }, report: { executiveSummary: { text: "Context", sourceIds: ["source-1"] } }, sources: [{ id: "source-1", title: "Record", url: "https://records.example/a" }], model: "gpt-test", createdByUserId: user.id });
+
+    expect((await repository.getLatestDeepResearchReport(investigation.id))?.id).toBe(report.id);
+    expect((await repository.getDeepResearchReportForSnapshot(investigation.id, article.id, "snapshot"))?.id).toBe(report.id);
+    expect(await repository.listSavedInvestigationsForUser(user.id)).toEqual([]);
+  });
+
+  it("keeps versioned research persisted but out of Saved Research until explicitly bookmarked", async () => {
+    const repository = new InMemoryJournolRepository();
+    const owner = await repository.createUser({ authIssuer: "test", authSubject: "research-owner", email: null });
+    const other = await repository.createUser({ authIssuer: "test", authSubject: "research-other", email: null });
+    const investigation = await repository.createInvestigation({ ownerUserId: owner.id, title: "Research library" });
+    const article = await repository.createSourceArticle({ ownerUserId: owner.id, originalUrl: "https://example.test/report", canonicalUrl: null, title: "Report", publisher: null, extractedText: "Source", contentHash: "report", retrievalStatus: "retrieved", retrievedAt: new Date() });
+    const first = await repository.createDeepResearchReport({ investigationId: investigation.id, sourceArticleId: article.id, instructions: null, inputSnapshotHash: "v1", researchPlan: {}, report: {}, sources: [], model: "test", createdByUserId: owner.id });
+    const second = await repository.createDeepResearchReport({ investigationId: investigation.id, sourceArticleId: article.id, instructions: "Update", inputSnapshotHash: "v2", researchPlan: {}, report: {}, sources: [], model: "test", createdByUserId: owner.id });
+
+    expect(await repository.listSavedDeepResearchReportsForUser(owner.id)).toEqual([]);
+    await repository.saveDeepResearchReportForUser(owner.id, first.id);
+    await repository.saveDeepResearchReportForUser(owner.id, first.id);
+    expect(await repository.listSavedDeepResearchReportsForUser(owner.id)).toMatchObject([{ report: { id: first.id, version: 1 } }]);
+    expect(await repository.getDeepResearchReport(second.id)).toMatchObject({ id: second.id, version: 2 });
+    expect(await repository.listSavedDeepResearchReportsForUser(other.id)).toEqual([]);
+    await repository.unsaveDeepResearchReportForUser(owner.id, first.id);
+    expect(await repository.getDeepResearchReport(first.id)).toMatchObject({ id: first.id });
+    expect(await repository.listSavedDeepResearchReportsForUser(owner.id)).toEqual([]);
   });
 });
