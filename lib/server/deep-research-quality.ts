@@ -26,6 +26,62 @@ export type ResearchSourceCard = {
   originatingClaimSourceId?: string | null;
 };
 
+export type StructuredResearchResponseDiagnostic =
+  | "object"
+  | "double_encoded_object"
+  | "empty_output"
+  | "invalid_json"
+  | "non_object_json"
+  | "incomplete_max_output_tokens"
+  | "incomplete_content_filter"
+  | "incomplete_max_messages"
+  | "incomplete_other"
+  | "provider_error";
+
+type StructuredResearchResponse = {
+  output_text?: unknown;
+  status?: unknown;
+  incomplete_details?: { reason?: unknown } | null;
+  error?: unknown;
+};
+
+/**
+ * Responses JSON Schema is expected to return an object, but an incomplete
+ * response or a provider edge case can leave output_text empty or double-
+ * encoded. Normalize only those safe structural variants. This deliberately
+ * does not attempt to repair partial JSON or invent report fields.
+ */
+export function parseStructuredResearchResponse(response: StructuredResearchResponse): {
+  report: Record<string, unknown> | null;
+  diagnostic: StructuredResearchResponseDiagnostic;
+} {
+  const incompleteReason = response.incomplete_details?.reason;
+  if (response.status === "incomplete" || incompleteReason) {
+    if (incompleteReason === "max_output_tokens") return { report: null, diagnostic: "incomplete_max_output_tokens" };
+    if (incompleteReason === "content_filter") return { report: null, diagnostic: "incomplete_content_filter" };
+    if (incompleteReason === "max_messages") return { report: null, diagnostic: "incomplete_max_messages" };
+    return { report: null, diagnostic: "incomplete_other" };
+  }
+  if (response.error) return { report: null, diagnostic: "provider_error" };
+  const output = typeof response.output_text === "string" ? response.output_text.trim() : "";
+  if (!output) return { report: null, diagnostic: "empty_output" };
+  try {
+    const parsed: unknown = JSON.parse(output);
+    if (record(parsed)) return { report: parsed, diagnostic: "object" };
+    if (typeof parsed === "string") {
+      try {
+        const nested: unknown = JSON.parse(parsed);
+        if (record(nested)) return { report: nested, diagnostic: "double_encoded_object" };
+      } catch {
+        // The diagnostic below remains non-object JSON. No partial parsing.
+      }
+    }
+    return { report: null, diagnostic: "non_object_json" };
+  } catch {
+    return { report: null, diagnostic: "invalid_json" };
+  }
+}
+
 function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

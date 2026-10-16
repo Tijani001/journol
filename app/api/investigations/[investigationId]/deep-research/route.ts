@@ -9,10 +9,13 @@ import { getPostgresRepository } from "@/lib/server/postgres-repository";
 import { AiOperationService } from "@/lib/server/ai-operations";
 import { snapshotHash } from "@/lib/server/workflow";
 import { DEEP_RESEARCH_ENGINE_VERSION, DeepResearchInsufficientSourcesError, DeepResearchSearchConfigurationError, DeepResearchSearchError, DeepResearchSearchUnavailableError, buildResearchPlan, searchExternalResearch } from "@/lib/server/deep-research-search";
-import { attachSourceExcerpts, enrichNumericalAnalysis, qualifiedIntelligenceSummary, removeInvalidResearchFindings, selectResearchRepairCandidate, summaryValidationDiagnostic, validateResearchReport } from "@/lib/server/deep-research-quality";
+import { attachSourceExcerpts, enrichNumericalAnalysis, parseStructuredResearchResponse, qualifiedIntelligenceSummary, removeInvalidResearchFindings, selectResearchRepairCandidate, summaryValidationDiagnostic, validateResearchReport } from "@/lib/server/deep-research-quality";
 
 const MODEL = "gpt-4.1-mini";
 const AI_TIMEOUT_MS = 22_000;
+// The report has a strict, multi-section JSON schema. This leaves room for a
+// complete object while remaining well inside the route's 55-second budget.
+const MAX_REPORT_OUTPUT_TOKENS = 3_200;
 export const maxDuration = 55;
 
 const sourceIds = { type: "array", items: { type: "string" } } as const;
@@ -175,10 +178,11 @@ export async function POST(request: Request, context: { params: Promise<{ invest
     const sourceCards = sources.map((source) => ({ ...source, snippet: source.snippet.slice(0, 1_500) }));
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY, timeout: AI_TIMEOUT_MS, maxRetries: 0 });
     const input = `ORIGINAL STORY (not independently verified):\nTITLE: ${article.title || "Untitled article"}\nPUBLISHER: ${article.publisher || "Not established"}\nPUBLICATION DATE: ${article.publishedAt?.toISOString() || "Not established"}\nTEXT: ${article.extractedText.slice(0, 18_000)}\n\nJOURNALIST PRIORITIES: ${instructions || "No additional instructions supplied."}\n\nRESEARCH PLAN: ${JSON.stringify(researchPlan)}\n\nEXTERNAL SOURCE CARDS: ${JSON.stringify(sourceCards)}`;
-    let response = await openai.responses.create({ model: MODEL, max_output_tokens: 2_600, instructions: `${INSTRUCTIONS}\nKeep each populated section concise: at most two findings or timeline items and at most three investigative leads.`, input, text: { format: { type: "json_schema", name: "deep_research_report", strict: true, schema: REPORT_SCHEMA } } });
+    let response = await openai.responses.create({ model: MODEL, max_output_tokens: MAX_REPORT_OUTPUT_TOKENS, instructions: `${INSTRUCTIONS}\nKeep each populated section concise: at most two findings or timeline items and at most three investigative leads. Return a JSON object matching the supplied schema, never a quoted JSON string.`, input, text: { format: { type: "json_schema", name: "deep_research_report", strict: true, schema: REPORT_SCHEMA } } });
     let usage = usageOf(response);
-    let report: unknown;
-    try { report = response.output_text?.trim() ? JSON.parse(response.output_text) : null; } catch { report = null; }
+    const primaryOutput = parseStructuredResearchResponse(response);
+    let report: unknown = primaryOutput.report;
+    console.info(`[journol:deep-research] stage=structured_output attempt=primary category=${primaryOutput.diagnostic}`);
     let enrichedReport = report && isRecord(report) ? attachSourceExcerpts(report, sourceCards) : null;
     let validation = validateResearchReport(enrichedReport, sourceCards, { title: article.title ?? undefined, text: article.extractedText });
     let summaryOrigin = "primary";
@@ -199,11 +203,17 @@ export async function POST(request: Request, context: { params: Promise<{ invest
       // has no structured object. It remains subject to every normal quality
       // and finding-level validation below.
       const primaryCandidate = enrichedReport;
-      const repair = await openai.responses.create({ model: MODEL, max_output_tokens: 2_600, instructions: `${INSTRUCTIONS}\n\nCORRECTION PASS: Use only the listed source IDs. Remove unsupported findings rather than guessing. Keep the report concise.`, input: `SOURCE IDS: ${sourceCards.map((source) => source.id).join(", ")}\nSOURCE CARDS: ${JSON.stringify(sourceCards)}\nPRIOR REPORT: ${JSON.stringify(report)}`, text: { format: { type: "json_schema", name: "deep_research_report_repair", strict: true, schema: REPORT_SCHEMA } } });
+      const recoveryFromMissingStructure = !primaryOutput.report;
+      const repair = await openai.responses.create({ model: MODEL, max_output_tokens: MAX_REPORT_OUTPUT_TOKENS, instructions: recoveryFromMissingStructure
+        ? `${INSTRUCTIONS}\n\nRECOVERY PASS: The prior response did not produce a usable JSON object. Create one compact, complete report from the supplied story and source cards. Populate only source-supported material; leave unsupported sections as empty arrays. Return a JSON object matching the schema, never a quoted JSON string.`
+        : `${INSTRUCTIONS}\n\nCORRECTION PASS: Use only the listed source IDs. Remove unsupported findings rather than guessing. Keep the report concise. Return a JSON object matching the schema, never a quoted JSON string.`, input: recoveryFromMissingStructure
+        ? input
+        : `SOURCE IDS: ${sourceCards.map((source) => source.id).join(", ")}\nSOURCE CARDS: ${JSON.stringify(sourceCards)}\nPRIOR REPORT: ${JSON.stringify(report)}`, text: { format: { type: "json_schema", name: "deep_research_report_repair", strict: true, schema: REPORT_SCHEMA } } });
       usage = { inputTokens: usage.inputTokens + usageOf(repair).inputTokens, outputTokens: usage.outputTokens + usageOf(repair).outputTokens };
-      let repairedReport: unknown;
-      try { repairedReport = repair.output_text?.trim() ? JSON.parse(repair.output_text) : null; } catch { repairedReport = null; }
+      const repairedOutput = parseStructuredResearchResponse(repair);
+      const repairedReport: unknown = repairedOutput.report;
       response = repair;
+      console.info(`[journol:deep-research] stage=structured_output attempt=${recoveryFromMissingStructure ? "recovery" : "repair"} category=${repairedOutput.diagnostic}`);
       const selected = selectResearchRepairCandidate(primaryCandidate, repairedReport);
       if (selected.usedRepair) {
         report = selected.report;

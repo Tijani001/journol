@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attachSourceExcerpts, calculateResearchFigure, classifyResearchFinding, enrichNumericalAnalysis, qualifiedIntelligenceSummary, removeInvalidResearchFindings, selectResearchRepairCandidate, summaryValidationDiagnostic, validateResearchReport, type ResearchSourceCard } from "@/lib/server/deep-research-quality";
+import { attachSourceExcerpts, calculateResearchFigure, classifyResearchFinding, enrichNumericalAnalysis, parseStructuredResearchResponse, qualifiedIntelligenceSummary, removeInvalidResearchFindings, selectResearchRepairCandidate, summaryValidationDiagnostic, validateResearchReport, type ResearchSourceCard } from "@/lib/server/deep-research-quality";
 
 const source: ResearchSourceCard = {
   id: "source-1",
@@ -35,6 +35,18 @@ function report(overrides: Record<string, unknown> = {}) {
 }
 
 describe("Deep Research quality controls", () => {
+  it("normalizes a double-encoded structured provider response without accepting partial JSON", () => {
+    const payload = { executiveSummary: { text: "A source-linked summary.", sourceIds: ["source-1"] } };
+    expect(parseStructuredResearchResponse({ output_text: JSON.stringify(JSON.stringify(payload)), status: "completed" })).toEqual({ report: payload, diagnostic: "double_encoded_object" });
+    expect(parseStructuredResearchResponse({ output_text: "{", status: "completed" })).toEqual({ report: null, diagnostic: "invalid_json" });
+    expect(parseStructuredResearchResponse({ output_text: "", status: "incomplete", incomplete_details: { reason: "max_output_tokens" } })).toEqual({ report: null, diagnostic: "incomplete_max_output_tokens" });
+  });
+
+  it("distinguishes an empty structured response from a report-validation failure", () => {
+    expect(parseStructuredResearchResponse({ output_text: "", status: "completed" })).toEqual({ report: null, diagnostic: "empty_output" });
+    expect(parseStructuredResearchResponse({ output_text: JSON.stringify(["not", "a report"]), status: "completed" })).toEqual({ report: null, diagnostic: "non_object_json" });
+  });
+
   it("retains the validated primary candidate when a bounded repair is not a structured object", () => {
     const primary = { keyFindings: [] };
     expect(selectResearchRepairCandidate(primary, null)).toEqual({ report: primary, usedRepair: false });
