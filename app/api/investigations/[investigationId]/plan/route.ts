@@ -16,9 +16,15 @@ import {
   alignMinorFirstActionDifference,
   FIRST_ACTION_MISMATCH,
 } from "@/lib/investigation-plan-consistency";
+import { primarySourceMaterial } from "@/lib/server/source-material";
 
 const MODEL = "gpt-4.1-mini";
 const MAX_INPUT_CHARACTERS = 40_000;
+// Retrieved articles are stored at up to 30,000 characters and pass unchanged.
+// Uploaded documents are shortened to leave room for the assessment and for
+// their line breaks, which JSON encoding doubles.
+const PRIMARY_ARTICLE_CHARACTERS = 30_000;
+const PRIMARY_DOCUMENT_CHARACTERS = 22_000;
 const AI_TIMEOUT_MS = 25_000;
 export const maxDuration = 55;
 
@@ -497,13 +503,16 @@ export async function POST(
     );
   }
 
+  const primarySource = primarySourceMaterial(article, article.sourceKind === "document" ? PRIMARY_DOCUMENT_CHARACTERS : PRIMARY_ARTICLE_CHARACTERS);
   const suppliedMaterial = {
     title: article.title || "Not supplied",
     description: article.publisher || "Not supplied",
     source: article.publisher || "Not supplied",
-    url: article.canonicalUrl || article.originalUrl || "Not supplied",
+    url: article.canonicalUrl || article.originalUrl || (article.fileName ? `Uploaded document: ${article.fileName}` : "Not supplied"),
     articleText:
-      article.extractedText || "No retrieved article text supplied.",
+      primarySource.text || "No retrieved article text supplied.",
+    // Present only when a long uploaded document was shortened.
+    ...(primarySource.note ? { articleTextNote: primarySource.note } : {}),
     leadContext: lead.content,
     evidenceAssessment: evidenceAssessment.content,
   };

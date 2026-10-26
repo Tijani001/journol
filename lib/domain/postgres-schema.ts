@@ -43,10 +43,12 @@ export const JOURNOL_POSTGRES_SCHEMA = {
   source_articles: {
     primaryKey: ["id"], columns: {
       id: { type: "uuid" }, owner_user_id: { type: "uuid", references: "users.id" },
-      original_url: { type: "text" }, canonical_url: { type: "text", nullable: true }, title: { type: "text", nullable: true },
+      original_url: { type: "text", nullable: true }, canonical_url: { type: "text", nullable: true }, title: { type: "text", nullable: true },
       publisher: { type: "text", nullable: true }, published_at: { type: "timestamptz", nullable: true }, extracted_text: { type: "text" }, content_hash: { type: "text" },
-      retrieval_status: { type: "text" }, retrieved_at: { type: "timestamptz" }, ...auditColumns,
-    }, indexes: ["owner_user_id, created_at DESC", "owner_user_id, canonical_url", "owner_user_id, published_at DESC"],
+      retrieval_status: { type: "text" }, retrieved_at: { type: "timestamptz" }, source_kind: { type: "text" }, file_name: { type: "text", nullable: true },
+      mime_type: { type: "text", nullable: true }, byte_size: { type: "integer", nullable: true }, page_count: { type: "integer", nullable: true },
+      extraction_method: { type: "text", nullable: true }, extraction_notes: { type: "jsonb" }, text_truncated: { type: "boolean" }, ...auditColumns,
+    }, indexes: ["owner_user_id, created_at DESC", "owner_user_id, canonical_url", "owner_user_id, published_at DESC", "owner_user_id, content_hash"],
   },
   saved_stories: {
     primaryKey: ["id"], columns: {
@@ -65,7 +67,50 @@ export const JOURNOL_POSTGRES_SCHEMA = {
     primaryKey: ["investigation_id", "source_article_id"], columns: {
       investigation_id: { type: "uuid", references: "investigations.id" }, source_article_id: { type: "uuid", references: "source_articles.id" },
       added_by_user_id: { type: "uuid", references: "users.id" }, created_at: { type: "timestamptz" },
-    },
+    }, indexes: ["investigation_id, created_at"],
+  },
+  investigation_claims: {
+    primaryKey: ["id"], columns: {
+      id: { type: "uuid" }, investigation_id: { type: "uuid", references: "investigations.id" }, statement: { type: "text" }, origin: { type: "text" },
+      origin_key: { type: "text", nullable: true }, verdict: { type: "text" }, verdict_rationale: { type: "text", nullable: true },
+      verdict_set_by_user_id: { type: "uuid", references: "users.id", nullable: true }, verdict_set_at: { type: "timestamptz", nullable: true },
+      created_by_user_id: { type: "uuid", references: "users.id" }, ...auditColumns,
+    }, unique: ["investigation_id, origin_key"], indexes: ["investigation_id, created_at"],
+  },
+  claim_evidence: {
+    primaryKey: ["id"], columns: {
+      id: { type: "uuid" }, claim_id: { type: "uuid", references: "investigation_claims.id" }, evidence_kind: { type: "text" }, stance: { type: "text" },
+      source_article_id: { type: "uuid", references: "source_articles.id", nullable: true }, url: { type: "text", nullable: true }, title: { type: "text", nullable: true },
+      record_type: { type: "text", nullable: true }, excerpt: { type: "text", nullable: true }, note: { type: "text", nullable: true },
+      excerpt_found_in_source: { type: "boolean", nullable: true }, added_by_user_id: { type: "uuid", references: "users.id" }, ...auditColumns,
+    }, indexes: ["claim_id, created_at", "source_article_id"],
+  },
+  claim_verdict_events: {
+    primaryKey: ["id"], columns: {
+      id: { type: "uuid" }, claim_id: { type: "uuid", references: "investigation_claims.id" }, verdict: { type: "text" }, rationale: { type: "text", nullable: true },
+      set_by_user_id: { type: "uuid", references: "users.id" }, created_at: { type: "timestamptz" },
+    }, indexes: ["claim_id, created_at"],
+  },
+  public_record_lookups: {
+    primaryKey: ["id"], columns: {
+      id: { type: "uuid" }, investigation_id: { type: "uuid", references: "investigations.id" }, query: { type: "text" }, record_types: { type: "jsonb" },
+      results: { type: "jsonb" }, outcomes: { type: "jsonb" }, created_by_user_id: { type: "uuid", references: "users.id" }, created_at: { type: "timestamptz" },
+    }, indexes: ["investigation_id, created_at DESC"],
+  },
+  procurement_awards: {
+    primaryKey: ["ocid", "award_id"], columns: {
+      ocid: { type: "text" }, award_id: { type: "text" }, publication: { type: "text" }, buyer_name: { type: "text", nullable: true }, title: { type: "text", nullable: true },
+      description: { type: "text", nullable: true }, supplier_names: { type: "text[]" }, amount: { type: "numeric", nullable: true }, currency: { type: "text", nullable: true },
+      award_date: { type: "timestamptz", nullable: true }, award_status: { type: "text", nullable: true }, procurement_method: { type: "text", nullable: true },
+      contract_amount: { type: "numeric", nullable: true }, contract_currency: { type: "text", nullable: true }, release_date: { type: "timestamptz", nullable: true },
+      search_text: { type: "text" }, ingested_at: { type: "timestamptz" },
+    }, indexes: ["search_text (gin_trgm_ops)", "award_date DESC"],
+  },
+  procurement_ingestion_runs: {
+    primaryKey: ["id"], columns: {
+      id: { type: "uuid" }, publication: { type: "text" }, source_file: { type: "text" }, status: { type: "text" }, processes_read: { type: "integer" },
+      awards_upserted: { type: "integer" }, error: { type: "text", nullable: true }, started_at: { type: "timestamptz" }, finished_at: { type: "timestamptz", nullable: true },
+    }, indexes: ["publication, finished_at DESC"],
   },
   investigative_leads: {
     primaryKey: ["id"], columns: {

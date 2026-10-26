@@ -56,6 +56,49 @@ configuration message and does not fabricate a research report. Completed
 reports are tied to the authenticated user's investigation and source article,
 and are reused for the same source and research instructions.
 
+## Investigation desk
+
+Each saved investigation has an **investigation desk** at `/workspace/<id>`,
+reached from the plan's “Open the investigation desk” link. It has three parts.
+
+**Sources.** An investigation can rest on several sources, not just the story it
+started from. Journalists upload documents (text-based PDF, Word `.docx` or
+plain text, up to 4 MB, the Vercel request limit) or add further web pages.
+Journol keeps the extracted text and file metadata, never the original file,
+and records what extraction could not capture (scanned pages, truncated long
+reports). Scanned PDFs are refused with an explanation because Journol does not
+run OCR yet. An investigation can also *start* from a document: “Analyse
+Document” on Discover creates the investigation and proposes a lead from the
+upload. When an evidence assessment runs, up to four attached sources are
+supplied alongside the lead's source, each shortened to an equal share of the
+input budget; a single-source assessment is unchanged.
+
+**Public records.** One search covers five Nigerian collections, each reached in
+a stated way so journalists know what a result is:
+
+| Collection | How Journol reaches it | Needs |
+| --- | --- | --- |
+| Federal contract awards (BPP/NOCOPO) | Indexed copy of the official OCDS open data | `npm run records:import-procurement` (monthly GitHub Action included) |
+| Company registry (CAC) | Dojah's CAC lookup by RC/BN number; affiliates' phone numbers and other personal fields are discarded | `DOJAH_APP_ID`, `DOJAH_SECRET_KEY` |
+| Treasury payments | Search restricted to opentreasury.gov.ng and govspend.ng | `TAVILY_API_KEY` |
+| Auditor-General reports | Search restricted to oaugf.ng | `TAVILY_API_KEY` |
+| Court judgments | Search restricted to nigerialii.org | `TAVILY_API_KEY` |
+
+Every lookup and its results are stored with the investigation as a record of
+what was checked. A collection that is unconfigured or unavailable says so and
+links to the official site; it never hides results from the others.
+
+**Claim board.** Claims are added by hand or imported from the plan's known
+information and verification steps (re-importing adds only new claims). Each
+claim collects evidence — a quoted passage from an attached source, a public
+record, a web page or a reporting note — marked as supporting, contradicting
+or adding context. A quoted passage is checked against the source's stored text
+and flagged if it cannot be found. Verdicts (confirmed, partly confirmed,
+contradicted, unproven, not yet checked) need a written rationale and evidence
+of the matching kind; evidence a verdict rests on cannot be removed until the
+verdict changes, and every verdict change is kept in the claim's history. The
+board downloads as a Markdown fact-check report.
+
 For a closed beta, configure Clerk in **Restricted** sign-up mode and invite
 each journalist. The investigation-scoped AI routes use the verified Clerk
 session and server-side ownership checks; no browser-supplied identity or

@@ -46,7 +46,9 @@ Clerk, database, rate-limit, and OpenAI environments.
 | `DATABASE_SSL` | Set to `true` for Supabase |
 | `DATABASE_SSL_CA_CERT` | Optional Supabase database CA PEM when the runtime does not already trust its chain; use `\n` for line breaks |
 | `OPENAI_API_KEY` | Server-only OpenAI project key |
-| `TAVILY_API_KEY` | Server-only Tavily API key for optional Deep Research external search |
+| `TAVILY_API_KEY` | Server-only Tavily API key for optional Deep Research external search and official-site public-record searches |
+| `DOJAH_APP_ID` | Optional, server-only Dojah app ID for automatic CAC registry lookups |
+| `DOJAH_SECRET_KEY` | Optional, server-only Dojah secret key for CAC lookups |
 | `JOURNOL_REQUIRE_SHARED_RATE_LIMIT` | Set to `true` |
 | `JOURNOL_RATE_LIMIT_REDIS_URL` | Upstash REST URL from Connect → REST; server-only |
 | `JOURNOL_RATE_LIMIT_REDIS_TOKEN` | Upstash Standard REST token; server-only |
@@ -68,8 +70,10 @@ authentication error rather than treating a visitor as a user.
 2. Review `db/migrations/0001_multi_user_foundation.sql`,
    `0002_saved_investigations.sql`,
    `0003_source_article_publication_date.sql`, and
-   `0004_saved_stories.sql`, `0005_deep_research.sql`, and
-   `0006_saved_deep_research.sql`.
+   `0004_saved_stories.sql`, `0005_deep_research.sql`,
+   `0006_saved_deep_research.sql`, `0007_document_sources.sql`,
+   `0008_claim_board.sql`, and `0009_public_records.sql`. Migration 0009
+   enables the `pg_trgm` extension, which Supabase provides.
 3. From a secure environment containing the intended production
    `DATABASE_URL` and `DATABASE_SSL=true`, run:
 
@@ -77,10 +81,21 @@ authentication error rather than treating a visitor as a user.
    npm run db:migrate
    ```
 
-4. Confirm the `schema_migrations` table contains all six checksummed files.
+4. Confirm the `schema_migrations` table contains all nine checksummed files.
    The script applies unapplied numbered migrations in order, rejects a changed
    applied migration, and does not reset or modify existing migration history.
 5. Only then deploy the Vercel project. Vercel builds never run migrations.
+6. Load federal contract awards for public-record search from the same secure
+   environment (the file is about 14 MB and takes a few minutes):
+
+   ```bash
+   npm run records:import-procurement
+   ```
+
+   To keep it current, add `DATABASE_URL`, `DATABASE_SSL` and, if used,
+   `DATABASE_SSL_CA_CERT` as GitHub repository secrets; the
+   *Import federal procurement data* workflow then refreshes the table monthly
+   and can be run by hand from the Actions tab.
 
 If the migration host reports `SELF_SIGNED_CERT_IN_CHAIN`, download the
 project CA from Supabase **Database Settings → SSL Configuration** and add it

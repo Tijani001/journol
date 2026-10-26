@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { JournolApiError, readApiResponse } from "@/lib/client/api";
 import { journalistMessageForUnexpectedFailure, type JournalistMessage } from "@/lib/client/journalist-messages";
@@ -35,6 +36,8 @@ type Story = {
   accent: string;
   publishedAt?: string | null;
   summary?: string;
+  /** Set when the investigation starts from an uploaded document rather than a URL. */
+  documentSource?: { investigationId: string; sourceArticleId: string; text: string };
 };
 type LegacyAnalysis = { summary?: string; significance?: string; reportedClaims?: string[]; independentlyVerified?: string[]; unverifiedClaims?: string[]; inferences?: string[]; investigativeAngle?: Record<string, string>; questions?: string[]; evidenceToSeek?: string[]; verificationPlan?: Array<string | { source?: string; action?: string; possibleFindings?: string }>; evidenceGaps?: string[]; alternativeExplanations?: string[]; confidence?: string; limitations?: string[]; analyzedFullArticle?: boolean; articleRetrievalNote?: string };
 type LeadProposal = Record<string, unknown> & { leadId: string; primaryLead: string; leadRationale: string; evidencePath: string[]; firstAction: string; confidence: string; validation: Record<string, unknown>; scope: string; missingInformation: string[] };
@@ -473,6 +476,8 @@ const [newsError, setNewsError] = useState("");
   const [savingStoryUrls, setSavingStoryUrls] = useState<string[]>([]);
   const [search, setSearch] = useState("");
   const [customStoryUrl, setCustomStoryUrl] = useState("");
+  const [startDocument, setStartDocument] = useState<File | null>(null);
+  const startDocumentInput = useRef<HTMLInputElement>(null);
   const [isSubmittingCustomStory, setIsSubmittingCustomStory] = useState(false);
   const [customStoryError, setCustomStoryError] = useState("");
   const [showAll, setShowAll] = useState(false);
@@ -680,7 +685,15 @@ const [newsError, setNewsError] = useState("");
   // explicitly the same source already open in the current investigation.
   // This prevents a stale URL/state value from attaching a new article to the
   // prior article's saved library record.
-  if (!activeInvestigationId || investigationSourceUrl !== lead.url) {
+  if (lead.documentSource) {
+    // The upload already created the investigation and stored the source.
+    activeInvestigationId = lead.documentSource.investigationId;
+    if (isCurrent()) {
+      setCreatedInvestigationId(activeInvestigationId);
+      setActivePlanInvestigationId(activeInvestigationId);
+      setInvestigationSourceUrl(lead.url);
+    }
+  } else if (!activeInvestigationId || investigationSourceUrl !== lead.url) {
     const response = await fetch("/api/investigations", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -699,7 +712,16 @@ const [newsError, setNewsError] = useState("");
     window.history.replaceState(null, "", `/?investigationId=${encodeURIComponent(activeInvestigationId)}`);
   }
   // Step 1: Retrieve the full article.
-  if (suppliedArticle?.text?.trim()) {
+  if (lead.documentSource) {
+    articleText = lead.documentSource.text;
+    sourceArticleId = lead.documentSource.sourceArticleId;
+    articleRetrievalNote = "Text was extracted from the document you uploaded. Its completeness has not been independently established.";
+    if (isCurrent()) {
+      workflowRequestId.current += 1;
+      setRetrievedArticleText(articleText);
+      setSourceArticleId(sourceArticleId);
+    }
+  } else if (suppliedArticle?.text?.trim()) {
     articleText = suppliedArticle.text;
     if (isCurrent()) setRetrievedArticleText(suppliedArticle.text);
     articleRetrievalNote =
@@ -895,6 +917,81 @@ const [newsError, setNewsError] = useState("");
       setIsSubmittingCustomStory(false);
     }
   };
+  const handleDocumentStart = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const file = startDocument;
+    if (!file) {
+      setCustomStoryError("Choose a document to investigate.");
+      return;
+    }
+    if (file.size > 4_000_000) {
+      setCustomStoryError("Documents must be 4 MB or smaller. Split or compress larger files.");
+      return;
+    }
+    if (!authenticationLoaded) {
+      setCustomStoryError("Journol is checking your sign-in status. Please try again in a moment.");
+      return;
+    }
+    if (!isSignedIn) {
+      router.replace("/sign-in");
+      return;
+    }
+    setCustomStoryError("");
+    setIsSubmittingCustomStory(true);
+    try {
+      const documentTitle = file.name.replace(/\.[a-z0-9]{1,10}$/i, "").replace(/[_-]+/g, " ").trim() || "Uploaded document";
+      const created = await readApiResponse(await fetch("/api/investigations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: documentTitle.slice(0, 200) }),
+      }), "Saving investigation");
+      const investigation = created.investigation as Record<string, unknown> | undefined;
+      if (!investigation || typeof investigation.id !== "string") throw new Error("Journol could not save this investigation.");
+      const form = new FormData();
+      form.set("file", file);
+      const uploadResponse = await fetch(`/api/investigations/${encodeURIComponent(investigation.id)}/documents`, { method: "POST", body: form });
+      const uploaded = await uploadResponse.json().catch(() => null) as Record<string, unknown> | null;
+      if (!uploadResponse.ok || !uploaded) {
+        throw new Error(typeof uploaded?.error === "string" ? uploaded.error : "Journol could not read this document.");
+      }
+      const stored = uploaded.sourceArticle as Record<string, unknown> | undefined;
+      if (!stored || typeof stored.id !== "string" || typeof uploaded.text !== "string") throw new Error("Journol could not store this document.");
+      window.history.replaceState(null, "", `/?investigationId=${encodeURIComponent(investigation.id)}`);
+      const documentStory: Story = {
+        id: `document-${stored.id}`,
+        title: typeof stored.title === "string" && stored.title ? stored.title : documentTitle,
+        source: "Uploaded document",
+        url: "",
+        description: "Journol extracted this document's text and will propose a lead from it.",
+        summary: "Journalist-uploaded document",
+        publishedAt: null,
+        time: "Uploaded by you",
+        category: "Document",
+        location: "Not specified",
+        signal: "Journalist-supplied document",
+        evidence: 0,
+        score: 0,
+        color: "#eef2ff",
+        accent: "#3730a3",
+        documentSource: { investigationId: investigation.id, sourceArticleId: stored.id, text: uploaded.text },
+      };
+      setStartDocument(null);
+      if (startDocumentInput.current) startDocumentInput.current.value = "";
+      setSelectedLead(documentStory);
+      setShowLeadDetails(true);
+      await analyzeLead(documentStory);
+    } catch (error) {
+      const message = showJournalistError(error, {
+        title: "Document could not be analysed",
+        detail: error instanceof Error && error.message ? error.message : "Journol couldn’t read this document. Please try another file.",
+        kind: "error",
+      });
+      setCustomStoryError(message.detail);
+    } finally {
+      setIsSubmittingCustomStory(false);
+    }
+  };
+
 const [showLeadDetails, setShowLeadDetails] = useState(false);
 const selectedLocations = [...selectedContinents, ...selectedCountries];
 const filteredStories = discoverLeads(filterArticles(newsArticles, {
@@ -1040,7 +1137,7 @@ const filteredStories = discoverLeads(filterArticles(newsArticles, {
           title: typeof source.title === "string" ? source.title : fallbackTitle,
           source: typeof source.publisher === "string" ? source.publisher : "Unknown publisher",
           url: typeof source.originalUrl === "string" ? source.originalUrl : "",
-          description: "Saved source article",
+          description: source.sourceKind === "document" ? "Saved uploaded document" : "Saved source article",
           location: "Location not verified",
           time: "Saved",
           category: "SAVED",
@@ -1049,6 +1146,10 @@ const filteredStories = discoverLeads(filterArticles(newsArticles, {
           score: 0,
           color: "#eef2ff",
           accent: "#3730a3",
+          // Lets "Reject / Clear Lead" propose a new lead from the same document.
+          documentSource: source.sourceKind === "document" && typeof source.id === "string" && typeof source.extractedText === "string"
+            ? { investigationId: investigationToOpen, sourceArticleId: source.id, text: source.extractedText }
+            : undefined,
         });
       }
       if (lead?.content && typeof lead.id === "string") setProposedLead({ ...(lead.content as Record<string, unknown>), leadId: lead.id } as LeadProposal);
@@ -1362,6 +1463,39 @@ style={{
     Journol will attempt to retrieve the article before proposing an
     investigative lead. Some publishers may restrict access.
   </p>
+  <form
+    onSubmit={handleDocumentStart}
+    style={{ display: "flex", gap: "12px", alignItems: "center", flexWrap: "wrap", marginTop: "18px", paddingTop: "18px", borderTop: "1px solid #eef0f4" }}
+  >
+    <label htmlFor="start-document" style={{ flex: "1 1 100%", fontSize: "13px", fontWeight: 700, color: "#334155" }}>
+      Or start from a document <span style={{ fontWeight: 500, color: "#64748b" }}>— an audit report, court filing or FOI response (PDF, Word or text, up to 4 MB). Its text is sent to Journol’s AI provider to propose a lead.</span>
+    </label>
+    <input
+      ref={startDocumentInput}
+      id="start-document"
+      type="file"
+      accept=".pdf,.docx,.txt,.md,.csv"
+      onChange={(event) => setStartDocument(event.target.files?.[0] ?? null)}
+      style={{ flex: "1 1 260px", minWidth: 0, fontSize: "13px" }}
+    />
+    <button
+      type="submit"
+      disabled={isSubmittingCustomStory || !startDocument}
+      aria-busy={isSubmittingCustomStory}
+      style={{
+        padding: "12px 18px",
+        border: "1px solid #c7c6ef",
+        borderRadius: "8px",
+        background: "#ffffff",
+        color: "#3f3d9e",
+        fontSize: "13px",
+        fontWeight: 700,
+        cursor: isSubmittingCustomStory ? "wait" : "pointer",
+      }}
+    >
+      {isSubmittingCustomStory ? <><ActionSpinner label="Reading document" /> Reading…</> : "Analyse Document →"}
+    </button>
+  </form>
 </section>
       <section className="discovery-section">
         <div className="section-heading">
@@ -2390,6 +2524,23 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       </p>
     )}
       </section>
+  {(activePlanInvestigationId || currentInvestigationId) && (
+    <section className="plan-section desk-handoff">
+      <div className="plan-section-heading">
+        <span className="plan-section-number">12</span>
+        <div>
+          <h3>Test the claims</h3>
+          <p>Add documents and official records, then check each claim in this plan against them on the investigation desk.</p>
+        </div>
+      </div>
+      <Link
+        className="desk-handoff-link"
+        href={`/workspace/${encodeURIComponent(activePlanInvestigationId || currentInvestigationId || "")}`}
+      >
+        Open the investigation desk →
+      </Link>
+    </section>
+  )}
 </section>
 </div>
 )}
@@ -4069,6 +4220,30 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       border-radius: 11px;
       background: #faf9ff;
     }
+
+    .desk-handoff {
+      margin-top: 15px;
+      padding: 22px;
+      border: 1px solid #dcdaf7;
+      border-radius: 11px;
+      background: #ffffff;
+    }
+
+    .desk-handoff-link {
+      display: inline-flex;
+      align-items: center;
+      min-height: 40px;
+      margin-top: 4px;
+      padding: 0 16px;
+      border-radius: 8px;
+      background: #6562c8;
+      color: #ffffff;
+      font: 700 13px "Manrope", sans-serif;
+      text-decoration: none;
+    }
+
+    .desk-handoff-link:hover { background: #4b48b0; }
+    .desk-handoff-link:focus-visible { outline: 3px solid #bdbbff; outline-offset: 2px; }
 
     .confidence-grid {
       display: grid;

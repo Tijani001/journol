@@ -9,9 +9,18 @@ import { isDatabaseConfigured } from "@/lib/server/database";
 import { AiOperationService } from "@/lib/server/ai-operations";
 import { snapshotHash } from "@/lib/server/workflow";
 import { limitRequest } from "@/lib/access";
+import { MAX_SUPPORTING_SOURCES, SUPPORTING_SOURCES_INSTRUCTIONS, primarySourceMaterial, supportingSourceMaterial } from "@/lib/server/source-material";
 
 const MODEL = "gpt-4.1-mini";
 const MAX_INPUT_CHARACTERS = 40_000;
+// Budgets within MAX_INPUT_CHARACTERS. Retrieved articles are stored at up to
+// 30,000 characters, so an article assessed on its own is never shortened.
+// Uploaded documents keep their line breaks, which JSON encoding doubles, so
+// they get a smaller share.
+const PRIMARY_ALONE_CHARACTERS = 30_000;
+const PRIMARY_DOCUMENT_ALONE_CHARACTERS = 24_000;
+const PRIMARY_WITH_SUPPORT_CHARACTERS = 18_000;
+const SUPPORTING_SOURCE_CHARACTERS = 10_000;
 const AI_TIMEOUT_MS = 25_000;
 export const maxDuration = 55;
 
@@ -441,14 +450,32 @@ export async function POST(request: Request, { params }: RouteContext) {
       );
     }
 
+    // Other sources the journalist attached are assessed alongside the lead's
+    // source. Without them the input is exactly what it was before, so earlier
+    // assessments are still reused.
+    const attachedSources = await repository.listInvestigationSources(investigationId);
+    const supportingArticles = (await Promise.all(
+      attachedSources
+        .filter((source) => source.sourceArticleId !== article.id)
+        .slice(0, MAX_SUPPORTING_SOURCES)
+        .map((source) => repository.getSourceArticle(source.sourceArticleId)),
+    )).filter((source): source is NonNullable<typeof source> => Boolean(source && source.ownerUserId === user.id));
+    const supportingSources = supportingSourceMaterial(supportingArticles, SUPPORTING_SOURCE_CHARACTERS);
+    const primary = primarySourceMaterial(
+      article,
+      supportingSources.length ? PRIMARY_WITH_SUPPORT_CHARACTERS : article.sourceKind === "document" ? PRIMARY_DOCUMENT_ALONE_CHARACTERS : PRIMARY_ALONE_CHARACTERS,
+    );
+
     const input = {
       title: article.title || "Not supplied",
       source: article.publisher || "Not supplied",
-      url: article.canonicalUrl || article.originalUrl || "Not supplied",
-      description: "Retrieved source article stored by Journol.",
-      articleText: suppliedArticleText || null,
+      url: article.canonicalUrl || article.originalUrl || (article.fileName ? `Uploaded document: ${article.fileName}` : "Not supplied"),
+      description: article.sourceKind === "document" ? "Document uploaded by the journalist; text extracted by Journol." : "Retrieved source article stored by Journol.",
+      articleText: primary.text || null,
       articleTextAvailable,
       leadContext: leadContent,
+      ...(primary.note ? { articleTextNote: primary.note } : {}),
+      ...(supportingSources.length ? { supportingSources } : {}),
     };
 
     const inputText = JSON.stringify(input);
@@ -642,7 +669,7 @@ Do not write interview questions, sequence reporting actions, or create an
 investigation plan. Do not invent facts to fill required fields. Use empty arrays
 where there are no material entries. Use meaningful limitations where necessary.
 Return only JSON matching the required schema.
-`;
+${"supportingSources" in input ? SUPPORTING_SOURCES_INSTRUCTIONS : ""}`;
 
     let response = await openai.responses.create({
       model: MODEL,

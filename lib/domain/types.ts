@@ -38,10 +38,14 @@ export interface Investigation {
   updatedAt: Timestamp;
 }
 
+export type SourceKind = "web_article" | "document";
+export type ExtractionMethod = "readability" | "pdf_text" | "docx_text" | "plain_text";
+
 export interface SourceArticle {
   id: Id;
   ownerUserId: Id;
-  originalUrl: string;
+  /** Web articles keep the URL they were retrieved from; uploaded documents have none. */
+  originalUrl: string | null;
   canonicalUrl: string | null;
   title: string | null;
   publisher: string | null;
@@ -51,6 +55,17 @@ export interface SourceArticle {
   contentHash: string;
   retrievalStatus: "retrieved" | "failed";
   retrievedAt: Timestamp;
+  sourceKind: SourceKind;
+  /** Original file name of an uploaded document. */
+  fileName: string | null;
+  mimeType: string | null;
+  byteSize: number | null;
+  pageCount: number | null;
+  extractionMethod: ExtractionMethod | null;
+  /** Plain-language caveats about what extraction did or did not capture. */
+  extractionNotes: string[];
+  /** True when only the first part of a long document's text was kept. */
+  textTruncated: boolean;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
@@ -178,4 +193,106 @@ export interface UsageRecord {
   estimatedCostMicros: number | null;
   createdAt: Timestamp;
   updatedAt: Timestamp;
+}
+
+/** A source attached to an investigation, without its full text. */
+export interface InvestigationSourceSummary {
+  sourceArticleId: Id;
+  sourceKind: SourceKind;
+  title: string | null;
+  publisher: string | null;
+  originalUrl: string | null;
+  canonicalUrl: string | null;
+  fileName: string | null;
+  mimeType: string | null;
+  byteSize: number | null;
+  pageCount: number | null;
+  extractionMethod: ExtractionMethod | null;
+  extractionNotes: string[];
+  textTruncated: boolean;
+  characterCount: number;
+  publishedAt: Timestamp | null;
+  addedByUserId: Id;
+  addedAt: Timestamp;
+}
+
+export type ClaimOrigin = "manual" | "plan_known_information" | "plan_verification";
+export type ClaimVerdict = "unverified" | "confirmed" | "partly_confirmed" | "contradicted" | "unproven";
+export type ClaimEvidenceKind = "source" | "public_record" | "web" | "note";
+export type ClaimEvidenceStance = "supports" | "contradicts" | "context";
+
+export interface InvestigationClaim {
+  id: Id;
+  investigationId: Id;
+  statement: string;
+  origin: ClaimOrigin;
+  originKey: string | null;
+  verdict: ClaimVerdict;
+  verdictRationale: string | null;
+  verdictSetByUserId: Id | null;
+  verdictSetAt: Timestamp | null;
+  createdByUserId: Id;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+export interface ClaimEvidence {
+  id: Id;
+  claimId: Id;
+  evidenceKind: ClaimEvidenceKind;
+  stance: ClaimEvidenceStance;
+  sourceArticleId: Id | null;
+  url: string | null;
+  title: string | null;
+  recordType: string | null;
+  excerpt: string | null;
+  note: string | null;
+  /** Whether a quoted excerpt was found in the cited source's stored text; null when not checkable. */
+  excerptFoundInSource: boolean | null;
+  addedByUserId: Id;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+export interface ClaimVerdictEvent {
+  id: Id;
+  claimId: Id;
+  verdict: ClaimVerdict;
+  rationale: string | null;
+  setByUserId: Id;
+  createdAt: Timestamp;
+}
+
+export interface ClaimWithEvidence extends InvestigationClaim {
+  evidence: ClaimEvidence[];
+  history: ClaimVerdictEvent[];
+}
+
+export interface PublicRecordLookup {
+  id: Id;
+  investigationId: Id;
+  query: string;
+  recordTypes: string[];
+  results: Array<Record<string, unknown>>;
+  outcomes: Array<Record<string, unknown>>;
+  createdByUserId: Id;
+  createdAt: Timestamp;
+}
+
+export interface ProcurementAward {
+  ocid: string;
+  awardId: string;
+  publication: string;
+  buyerName: string | null;
+  title: string | null;
+  description: string | null;
+  supplierNames: string[];
+  amount: number | null;
+  currency: string | null;
+  awardDate: Timestamp | null;
+  awardStatus: string | null;
+  procurementMethod: string | null;
+  contractAmount: number | null;
+  contractCurrency: string | null;
+  releaseDate: Timestamp | null;
 }

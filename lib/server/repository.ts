@@ -1,13 +1,18 @@
 import { randomUUID } from "node:crypto";
 import type {
-  AiOperation, AiOperationStage, AiOperationStatus, EvidenceAssessment,
-  DeepResearchReport, Id, Investigation, InvestigationAction, InvestigationPlan, InvestigativeLead,
-  SavedStory, SourceArticle, UsageRecord, UsageStatus, User,
+  AiOperation, AiOperationStage, AiOperationStatus, ClaimEvidence, ClaimVerdict, ClaimVerdictEvent, ClaimWithEvidence,
+  EvidenceAssessment, DeepResearchReport, Id, Investigation, InvestigationAction, InvestigationClaim, InvestigationPlan,
+  InvestigationSourceSummary, InvestigativeLead, ProcurementAward, PublicRecordLookup, SavedStory, SourceArticle,
+  UsageRecord, UsageStatus, User,
 } from "@/lib/domain/types";
 
 export type CreateUserInput = Pick<User, "authIssuer" | "authSubject" | "email"> & Partial<Pick<User, "role">>;
 export type CreateInvestigationInput = Pick<Investigation, "ownerUserId" | "title">;
-export type CreateSourceArticleInput = Omit<SourceArticle, "id" | "createdAt" | "updatedAt" | "publishedAt"> & { publishedAt?: Date | null };
+type SourceDocumentFields = "sourceKind" | "fileName" | "mimeType" | "byteSize" | "pageCount" | "extractionMethod" | "extractionNotes" | "textTruncated";
+/** Document metadata is optional so web-article callers keep their existing shape. */
+export type CreateSourceArticleInput = Omit<SourceArticle, "id" | "createdAt" | "updatedAt" | "publishedAt" | SourceDocumentFields>
+  & Partial<Pick<SourceArticle, SourceDocumentFields>>
+  & { publishedAt?: Date | null };
 export type SaveStoryInput = Pick<SavedStory, "userId" | "canonicalUrl" | "originalUrl" | "title" | "publisher" | "publishedAt" | "description">;
 export type CreateLeadInput = Omit<InvestigativeLead, "id" | "version" | "createdAt" | "updatedAt" | "approvedByUserId" | "approvedAt">;
 export type CreateEvidenceAssessmentInput = Omit<EvidenceAssessment, "id" | "version" | "createdAt" | "updatedAt">;
@@ -20,6 +25,13 @@ export type CreatePlanWithActionsInput = {
 };
 export type CreateAiOperationInput = Omit<AiOperation, "id" | "status" | "providerRequestId" | "errorCode" | "createdAt" | "updatedAt">;
 export type RecordUsageInput = Omit<UsageRecord, "id" | "createdAt" | "updatedAt">;
+export type CreateClaimInput = Pick<InvestigationClaim, "investigationId" | "statement" | "origin" | "originKey" | "createdByUserId">;
+export type SetClaimVerdictInput = { claimId: Id; verdict: ClaimVerdict; rationale: string | null; setByUserId: Id };
+export type CreateClaimEvidenceInput = Omit<ClaimEvidence, "id" | "createdAt" | "updatedAt">;
+export type CreatePublicRecordLookupInput = Omit<PublicRecordLookup, "id" | "createdAt">;
+/** Where a source is relied on; a source in use cannot be detached. */
+export type SourceUsage = { lead: boolean; deepResearch: boolean; claimEvidence: boolean };
+export type ProcurementIngestionSummary = { finishedAt: Date; awardsUpserted: number; sourceFile: string };
 
 /**
  * The only persistence contract used by authorization and future route code.
@@ -43,6 +55,11 @@ export interface JournolRepository {
   createSourceArticle(input: CreateSourceArticleInput): Promise<SourceArticle>;
   attachSourceToInvestigation(input: { investigationId: Id; sourceArticleId: Id; addedByUserId: Id }): Promise<void>;
   investigationHasSource(investigationId: Id, sourceArticleId: Id): Promise<boolean>;
+  listInvestigationSources(investigationId: Id): Promise<InvestigationSourceSummary[]>;
+  /** Finds a source this account already stored with identical text, to avoid duplicates. */
+  findOwnedSourceByContentHash(ownerUserId: Id, contentHash: string, sourceKind: SourceArticle["sourceKind"]): Promise<SourceArticle | null>;
+  getSourceUsage(investigationId: Id, sourceArticleId: Id): Promise<SourceUsage>;
+  detachSourceFromInvestigation(investigationId: Id, sourceArticleId: Id): Promise<boolean>;
   createLeadVersion(input: CreateLeadInput): Promise<InvestigativeLead>;
   getLatestLeadForSource(investigationId: Id, sourceArticleId: Id): Promise<InvestigativeLead | null>;
   getLatestLeadForInvestigation(investigationId: Id): Promise<InvestigativeLead | null>;
@@ -74,6 +91,23 @@ export interface JournolRepository {
   restartStalePendingAiOperation(operationId: Id, staleBefore: Date): Promise<AiOperation | null>;
   finishAiOperation(input: { operationId: Id; status: Exclude<AiOperationStatus, "pending">; providerRequestId?: string; errorCode?: string }): Promise<AiOperation | null>;
   recordUsage(input: RecordUsageInput): Promise<UsageRecord>;
+  listClaimsWithEvidence(investigationId: Id): Promise<ClaimWithEvidence[]>;
+  getClaim(id: Id): Promise<InvestigationClaim | null>;
+  createClaim(input: CreateClaimInput): Promise<InvestigationClaim>;
+  /** Adds claims whose originKey is not yet on the investigation's board; returns only those added. */
+  createClaimsIfAbsent(inputs: CreateClaimInput[]): Promise<InvestigationClaim[]>;
+  updateClaimStatement(id: Id, statement: string): Promise<InvestigationClaim | null>;
+  /** Records the verdict and appends it to the claim's history atomically. */
+  setClaimVerdict(input: SetClaimVerdictInput): Promise<InvestigationClaim | null>;
+  deleteClaim(id: Id): Promise<boolean>;
+  listClaimEvidence(claimId: Id): Promise<ClaimEvidence[]>;
+  getClaimEvidence(id: Id): Promise<ClaimEvidence | null>;
+  addClaimEvidence(input: CreateClaimEvidenceInput): Promise<ClaimEvidence>;
+  deleteClaimEvidence(id: Id): Promise<boolean>;
+  createPublicRecordLookup(input: CreatePublicRecordLookupInput): Promise<PublicRecordLookup>;
+  listPublicRecordLookups(investigationId: Id, limit: number): Promise<PublicRecordLookup[]>;
+  searchProcurementAwards(query: string, limit: number): Promise<ProcurementAward[]>;
+  getLatestProcurementIngestion(publication: string): Promise<ProcurementIngestionSummary | null>;
 }
 
 /**
@@ -87,7 +121,7 @@ export class InMemoryJournolRepository implements JournolRepository {
   private readonly savedInvestigations = new Map<string, Date>();
   private readonly savedStories = new Map<Id, SavedStory>();
   private readonly articles = new Map<Id, SourceArticle>();
-  private readonly attachments = new Set<string>();
+  private readonly attachments = new Map<string, { addedByUserId: Id; createdAt: Date }>();
   private readonly leads = new Map<Id, InvestigativeLead>();
   private readonly assessments = new Map<Id, EvidenceAssessment>();
   private readonly plans = new Map<Id, InvestigationPlan>();
@@ -96,6 +130,12 @@ export class InMemoryJournolRepository implements JournolRepository {
   private readonly actions = new Map<Id, InvestigationAction>();
   private readonly operations = new Map<Id, AiOperation>();
   private readonly usage = new Map<Id, UsageRecord>();
+  private readonly claims = new Map<Id, InvestigationClaim>();
+  private readonly claimEvidence = new Map<Id, ClaimEvidence>();
+  private readonly verdictEvents = new Map<Id, ClaimVerdictEvent>();
+  private readonly recordLookups = new Map<Id, PublicRecordLookup>();
+  /** Test seam: procurement awards are loaded by an ingestion job in production. */
+  readonly procurementAwards: ProcurementAward[] = [];
 
   async getUserByIdentity(issuer: string, subject: string) {
     return [...this.users.values()].find((user) => user.authIssuer === issuer && user.authSubject === subject) ?? null;
@@ -154,20 +194,49 @@ export class InMemoryJournolRepository implements JournolRepository {
 
   async createSourceArticle(input: CreateSourceArticleInput) {
     const now = new Date();
-    const article: SourceArticle = { id: randomUUID(), ...input, publishedAt: input.publishedAt ?? null, createdAt: now, updatedAt: now };
+    const article: SourceArticle = {
+      id: randomUUID(), sourceKind: "web_article", fileName: null, mimeType: null, byteSize: null, pageCount: null,
+      extractionMethod: null, extractionNotes: [], textTruncated: false,
+      ...input, publishedAt: input.publishedAt ?? null, createdAt: now, updatedAt: now,
+    };
     this.articles.set(article.id, article);
     return article;
   }
 
   async attachSourceToInvestigation({ investigationId, sourceArticleId, addedByUserId }: { investigationId: Id; sourceArticleId: Id; addedByUserId: Id }) {
-    // Preserve author metadata in the production contract even though this
-    // development adapter only needs the relationship key.
-    void addedByUserId;
-    this.attachments.add(`${investigationId}:${sourceArticleId}`);
+    const key = `${investigationId}:${sourceArticleId}`;
+    if (!this.attachments.has(key)) this.attachments.set(key, { addedByUserId, createdAt: new Date() });
   }
 
   async investigationHasSource(investigationId: Id, sourceArticleId: Id) {
     return this.attachments.has(`${investigationId}:${sourceArticleId}`);
+  }
+
+  async listInvestigationSources(investigationId: Id) {
+    const summaries: InvestigationSourceSummary[] = [];
+    for (const [key, attachment] of this.attachments) {
+      if (!key.startsWith(`${investigationId}:`)) continue;
+      const article = this.articles.get(key.slice(investigationId.length + 1));
+      if (article) summaries.push(sourceSummary(article, attachment.addedByUserId, attachment.createdAt));
+    }
+    return summaries.sort((a, b) => a.addedAt.getTime() - b.addedAt.getTime());
+  }
+
+  async findOwnedSourceByContentHash(ownerUserId: Id, contentHash: string, sourceKind: SourceArticle["sourceKind"]) {
+    return [...this.articles.values()].find((article) => article.ownerUserId === ownerUserId && article.contentHash === contentHash && article.sourceKind === sourceKind) ?? null;
+  }
+
+  async getSourceUsage(investigationId: Id, sourceArticleId: Id): Promise<SourceUsage> {
+    const claimIds = new Set([...this.claims.values()].filter((claim) => claim.investigationId === investigationId).map((claim) => claim.id));
+    return {
+      lead: [...this.leads.values()].some((lead) => lead.investigationId === investigationId && lead.sourceArticleId === sourceArticleId),
+      deepResearch: [...this.researchReports.values()].some((report) => report.investigationId === investigationId && report.sourceArticleId === sourceArticleId),
+      claimEvidence: [...this.claimEvidence.values()].some((item) => claimIds.has(item.claimId) && item.sourceArticleId === sourceArticleId),
+    };
+  }
+
+  async detachSourceFromInvestigation(investigationId: Id, sourceArticleId: Id) {
+    return this.attachments.delete(`${investigationId}:${sourceArticleId}`);
   }
 
   async createLeadVersion(input: CreateLeadInput) {
@@ -361,6 +430,125 @@ export class InMemoryJournolRepository implements JournolRepository {
     this.usage.set(record.id, record);
     return record;
   }
+
+  async listClaimsWithEvidence(investigationId: Id) {
+    return [...this.claims.values()]
+      .filter((claim) => claim.investigationId === investigationId)
+      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+      .map((claim) => ({
+        ...claim,
+        evidence: [...this.claimEvidence.values()].filter((item) => item.claimId === claim.id).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()),
+        history: [...this.verdictEvents.values()].filter((event) => event.claimId === claim.id).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime()),
+      }));
+  }
+
+  async getClaim(id: Id) { return this.claims.get(id) ?? null; }
+
+  async createClaim(input: CreateClaimInput) {
+    if (input.originKey && [...this.claims.values()].some((claim) => claim.investigationId === input.investigationId && claim.originKey === input.originKey)) {
+      throw new Error("CLAIM_ORIGIN_KEY_EXISTS");
+    }
+    const now = new Date();
+    const claim: InvestigationClaim = {
+      id: randomUUID(), ...input, verdict: "unverified", verdictRationale: null, verdictSetByUserId: null, verdictSetAt: null, createdAt: now, updatedAt: now,
+    };
+    this.claims.set(claim.id, claim);
+    return claim;
+  }
+
+  async createClaimsIfAbsent(inputs: CreateClaimInput[]) {
+    const created: InvestigationClaim[] = [];
+    for (const input of inputs) {
+      const exists = input.originKey && [...this.claims.values()].some((claim) => claim.investigationId === input.investigationId && claim.originKey === input.originKey);
+      if (!exists) created.push(await this.createClaim(input));
+    }
+    return created;
+  }
+
+  async updateClaimStatement(id: Id, statement: string) {
+    const claim = this.claims.get(id);
+    if (!claim) return null;
+    const updated = { ...claim, statement, updatedAt: new Date() };
+    this.claims.set(id, updated);
+    return updated;
+  }
+
+  async setClaimVerdict(input: SetClaimVerdictInput) {
+    const claim = this.claims.get(input.claimId);
+    if (!claim) return null;
+    const now = new Date();
+    const updated: InvestigationClaim = { ...claim, verdict: input.verdict, verdictRationale: input.rationale, verdictSetByUserId: input.setByUserId, verdictSetAt: now, updatedAt: now };
+    this.claims.set(claim.id, updated);
+    const event: ClaimVerdictEvent = { id: randomUUID(), claimId: claim.id, verdict: input.verdict, rationale: input.rationale, setByUserId: input.setByUserId, createdAt: now };
+    this.verdictEvents.set(event.id, event);
+    return updated;
+  }
+
+  async deleteClaim(id: Id) {
+    for (const [evidenceId, item] of this.claimEvidence) if (item.claimId === id) this.claimEvidence.delete(evidenceId);
+    for (const [eventId, event] of this.verdictEvents) if (event.claimId === id) this.verdictEvents.delete(eventId);
+    return this.claims.delete(id);
+  }
+
+  async listClaimEvidence(claimId: Id) {
+    return [...this.claimEvidence.values()].filter((item) => item.claimId === claimId).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  }
+
+  async getClaimEvidence(id: Id) { return this.claimEvidence.get(id) ?? null; }
+
+  async addClaimEvidence(input: CreateClaimEvidenceInput) {
+    const now = new Date();
+    const item: ClaimEvidence = { id: randomUUID(), ...input, createdAt: now, updatedAt: now };
+    this.claimEvidence.set(item.id, item);
+    return item;
+  }
+
+  async deleteClaimEvidence(id: Id) { return this.claimEvidence.delete(id); }
+
+  async createPublicRecordLookup(input: CreatePublicRecordLookupInput) {
+    const lookup: PublicRecordLookup = { id: randomUUID(), ...input, createdAt: new Date() };
+    this.recordLookups.set(lookup.id, lookup);
+    return lookup;
+  }
+
+  async listPublicRecordLookups(investigationId: Id, limit: number) {
+    return [...this.recordLookups.values()]
+      .filter((lookup) => lookup.investigationId === investigationId)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, limit);
+  }
+
+  async searchProcurementAwards(query: string, limit: number) {
+    const needle = query.trim().toLowerCase();
+    return this.procurementAwards
+      .filter((award) => [award.buyerName, award.title, ...award.supplierNames].some((value) => value?.toLowerCase().includes(needle)))
+      .slice(0, limit);
+  }
+
+  async getLatestProcurementIngestion() { return null; }
+}
+
+/** Shapes a stored source for listing without its full extracted text. */
+export function sourceSummary(article: SourceArticle, addedByUserId: Id, addedAt: Date): InvestigationSourceSummary {
+  return {
+    sourceArticleId: article.id,
+    sourceKind: article.sourceKind,
+    title: article.title,
+    publisher: article.publisher,
+    originalUrl: article.originalUrl,
+    canonicalUrl: article.canonicalUrl,
+    fileName: article.fileName,
+    mimeType: article.mimeType,
+    byteSize: article.byteSize,
+    pageCount: article.pageCount,
+    extractionMethod: article.extractionMethod,
+    extractionNotes: article.extractionNotes,
+    textTruncated: article.textTruncated,
+    characterCount: article.extractedText.length,
+    publishedAt: article.publishedAt,
+    addedByUserId,
+    addedAt,
+  };
 }
 
 export type { AiOperationStage, AiOperationStatus, UsageStatus };

@@ -357,14 +357,24 @@ export async function POST(request: Request) {
     return errorResponse("Source article not found.", 404);
   }
 
-  const articleText = article.extractedText;
+  // Long uploaded documents are analysed from their opening portion; the note
+  // below tells the model, and the journalist, that the rest was not read.
+  const documentExcerptLimit = MAX_INPUT_CHARACTERS - 6_000;
+  const documentExcerpted = article.sourceKind === "document" && article.extractedText.length > documentExcerptLimit;
+  const articleText = documentExcerpted ? article.extractedText.slice(0, documentExcerptLimit) : article.extractedText;
   const title = article.title || "Untitled article";
   const source = article.publisher || "Unknown publisher";
-  const url = article.originalUrl;
+  const isDocument = article.sourceKind === "document";
+  const url = article.originalUrl ?? (isDocument ? `Uploaded document: ${article.fileName ?? "untitled"}` : "Not supplied");
   const publishedAt = article.publishedAt ? article.publishedAt.toISOString() : "Not established";
   const description = "";
-  const articleRetrievalNote =
-    article.retrievalStatus === "retrieved"
+  const articleRetrievalNote = isDocument
+    ? [
+      "Text was extracted from a document the journalist uploaded.",
+      documentExcerpted ? `Only the first ${documentExcerptLimit.toLocaleString("en-GB")} characters of the document were supplied for lead selection.` : "",
+      ...article.extractionNotes,
+    ].filter(Boolean).join(" ")
+    : article.retrievalStatus === "retrieved"
       ? "Article text was retrieved and stored by Journol."
       : `Article retrieval status: ${article.retrievalStatus}.`;
 

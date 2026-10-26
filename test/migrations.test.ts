@@ -38,4 +38,25 @@ describe("initial PostgreSQL migration", () => {
     expect(migration).toContain("PRIMARY KEY (user_id, deep_research_report_id)");
     expect(migration).toContain("saved_deep_research_reports_user_saved_at_idx");
   });
+
+  it("adds uploaded documents as sources without loosening web-article URLs", async () => {
+    const migration = await readFile(new URL("../db/migrations/0007_document_sources.sql", import.meta.url), "utf8");
+    expect(migration).toContain("ADD COLUMN IF NOT EXISTS source_kind");
+    expect(migration).toContain("ALTER COLUMN original_url DROP NOT NULL");
+    expect(migration).toContain("source_kind = 'document' OR original_url IS NOT NULL");
+  });
+
+  it("adds the claim board with verdict rationale and history", async () => {
+    const migration = await readFile(new URL("../db/migrations/0008_claim_board.sql", import.meta.url), "utf8");
+    for (const table of ["investigation_claims", "claim_evidence", "claim_verdict_events"]) expect(migration).toContain(`CREATE TABLE ${table}`);
+    expect(migration).toContain("investigation_claims_rationale_required_check");
+    expect(migration).toContain("WHERE origin_key IS NOT NULL");
+  });
+
+  it("adds public record lookups and an indexed procurement table", async () => {
+    const migration = await readFile(new URL("../db/migrations/0009_public_records.sql", import.meta.url), "utf8");
+    expect(migration).toContain("CREATE TABLE public_record_lookups");
+    expect(migration).toContain("CREATE TABLE procurement_awards");
+    expect(migration).toContain("gin_trgm_ops");
+  });
 });

@@ -4,14 +4,17 @@ import { randomUUID } from "node:crypto";
 import type { Pool, QueryResultRow } from "pg";
 import { getDatabasePool } from "@/lib/server/database";
 import type {
-  AiOperation, AiOperationStage, AiOperationStatus, DeepResearchReport, EvidenceAssessment, Id,
-  Investigation, InvestigationAction, InvestigationPlan, InvestigativeLead,
-  SavedStory, SourceArticle, UsageRecord, User,
+  AiOperation, AiOperationStage, AiOperationStatus, ClaimEvidence, ClaimVerdictEvent, ClaimWithEvidence,
+  DeepResearchReport, EvidenceAssessment, ExtractionMethod, Id, Investigation, InvestigationAction, InvestigationClaim,
+  InvestigationPlan, InvestigativeLead, ProcurementAward, PublicRecordLookup, SavedStory, SourceArticle, UsageRecord, User,
 } from "@/lib/domain/types";
-import type {
-  CreateActionInput, CreateAiOperationInput, CreateDeepResearchReportInput, CreateEvidenceAssessmentInput,
-  CreateInvestigationPlanInput, CreateInvestigationInput, CreateLeadInput, CreatePlanWithActionsInput,
-  CreateSourceArticleInput, CreateUserInput, JournolRepository, RecordUsageInput, SaveStoryInput,
+import {
+  sourceSummary,
+  type CreateActionInput, type CreateAiOperationInput, type CreateClaimEvidenceInput, type CreateClaimInput,
+  type CreateDeepResearchReportInput, type CreateEvidenceAssessmentInput, type CreateInvestigationPlanInput,
+  type CreateInvestigationInput, type CreateLeadInput, type CreatePlanWithActionsInput, type CreatePublicRecordLookupInput,
+  type CreateSourceArticleInput, type CreateUserInput, type JournolRepository, type RecordUsageInput, type SaveStoryInput,
+  type SetClaimVerdictInput, type SourceUsage,
 } from "@/lib/server/repository";
 
 type Row = QueryResultRow & Record<string, unknown>;
@@ -26,9 +29,37 @@ function userFromRow(row: Row): User {
 function investigationFromRow(row: Row): Investigation {
   return { id: String(row.id), ownerUserId: String(row.owner_user_id), title: String(row.title), status: row.status === "archived" || row.status === "closed" ? row.status : "active", currentLeadId: nullableString(row.current_lead_id), currentEvidenceAssessmentId: nullableString(row.current_evidence_assessment_id), currentPlanId: nullableString(row.current_plan_id), createdAt: date(row.created_at), updatedAt: date(row.updated_at) };
 }
+const EXTRACTION_METHODS: readonly ExtractionMethod[] = ["readability", "pdf_text", "docx_text", "plain_text"];
+function nullableNumber(value: unknown): number | null { if (value === null || value === undefined) return null; const parsed = Number(value); return Number.isFinite(parsed) ? parsed : null; }
+function stringList(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; }
 function articleFromRow(row: Row): SourceArticle {
-  return { id: String(row.id), ownerUserId: String(row.owner_user_id), originalUrl: String(row.original_url), canonicalUrl: nullableString(row.canonical_url), title: nullableString(row.title), publisher: nullableString(row.publisher), publishedAt: row.published_at ? date(row.published_at) : null, extractedText: String(row.extracted_text), contentHash: String(row.content_hash), retrievalStatus: row.retrieval_status === "failed" ? "failed" : "retrieved", retrievedAt: date(row.retrieved_at), createdAt: date(row.created_at), updatedAt: date(row.updated_at) };
+  return {
+    id: String(row.id), ownerUserId: String(row.owner_user_id), originalUrl: nullableString(row.original_url), canonicalUrl: nullableString(row.canonical_url),
+    title: nullableString(row.title), publisher: nullableString(row.publisher), publishedAt: row.published_at ? date(row.published_at) : null,
+    extractedText: String(row.extracted_text), contentHash: String(row.content_hash), retrievalStatus: row.retrieval_status === "failed" ? "failed" : "retrieved",
+    retrievedAt: date(row.retrieved_at), sourceKind: row.source_kind === "document" ? "document" : "web_article", fileName: nullableString(row.file_name),
+    mimeType: nullableString(row.mime_type), byteSize: nullableNumber(row.byte_size), pageCount: nullableNumber(row.page_count),
+    extractionMethod: EXTRACTION_METHODS.includes(row.extraction_method as ExtractionMethod) ? row.extraction_method as ExtractionMethod : null,
+    extractionNotes: stringList(row.extraction_notes), textTruncated: row.text_truncated === true, createdAt: date(row.created_at), updatedAt: date(row.updated_at),
+  };
 }
+function claimFromRow(row: Row): InvestigationClaim {
+  return { id: String(row.id), investigationId: String(row.investigation_id), statement: String(row.statement), origin: row.origin as InvestigationClaim["origin"], originKey: nullableString(row.origin_key), verdict: row.verdict as InvestigationClaim["verdict"], verdictRationale: nullableString(row.verdict_rationale), verdictSetByUserId: nullableString(row.verdict_set_by_user_id), verdictSetAt: row.verdict_set_at ? date(row.verdict_set_at) : null, createdByUserId: String(row.created_by_user_id), createdAt: date(row.created_at), updatedAt: date(row.updated_at) };
+}
+function claimEvidenceFromRow(row: Row): ClaimEvidence {
+  return { id: String(row.id), claimId: String(row.claim_id), evidenceKind: row.evidence_kind as ClaimEvidence["evidenceKind"], stance: row.stance as ClaimEvidence["stance"], sourceArticleId: nullableString(row.source_article_id), url: nullableString(row.url), title: nullableString(row.title), recordType: nullableString(row.record_type), excerpt: nullableString(row.excerpt), note: nullableString(row.note), excerptFoundInSource: typeof row.excerpt_found_in_source === "boolean" ? row.excerpt_found_in_source : null, addedByUserId: String(row.added_by_user_id), createdAt: date(row.created_at), updatedAt: date(row.updated_at) };
+}
+function verdictEventFromRow(row: Row): ClaimVerdictEvent {
+  return { id: String(row.id), claimId: String(row.claim_id), verdict: row.verdict as ClaimVerdictEvent["verdict"], rationale: nullableString(row.rationale), setByUserId: String(row.set_by_user_id), createdAt: date(row.created_at) };
+}
+function lookupFromRow(row: Row): PublicRecordLookup {
+  return { id: String(row.id), investigationId: String(row.investigation_id), query: String(row.query), recordTypes: stringList(row.record_types), results: Array.isArray(row.results) ? row.results.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item)) : [], outcomes: Array.isArray(row.outcomes) ? row.outcomes.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item)) : [], createdByUserId: String(row.created_by_user_id), createdAt: date(row.created_at) };
+}
+function awardFromRow(row: Row): ProcurementAward {
+  return { ocid: String(row.ocid), awardId: String(row.award_id), publication: String(row.publication), buyerName: nullableString(row.buyer_name), title: nullableString(row.title), description: nullableString(row.description), supplierNames: stringList(row.supplier_names), amount: nullableNumber(row.amount), currency: nullableString(row.currency), awardDate: row.award_date ? date(row.award_date) : null, awardStatus: nullableString(row.award_status), procurementMethod: nullableString(row.procurement_method), contractAmount: nullableNumber(row.contract_amount), contractCurrency: nullableString(row.contract_currency), releaseDate: row.release_date ? date(row.release_date) : null };
+}
+/** Escapes LIKE wildcards so a journalist's query is matched literally. */
+function likePattern(value: string) { return `%${value.replace(/[\\%_]/g, (match) => `\\${match}`)}%`; }
 function savedStoryFromRow(row: Row): SavedStory {
   return { id: String(row.id), userId: String(row.user_id), canonicalUrl: String(row.canonical_url), originalUrl: String(row.original_url), title: String(row.title), publisher: nullableString(row.publisher), publishedAt: row.published_at ? date(row.published_at) : null, description: nullableString(row.description), savedAt: date(row.saved_at), createdAt: date(row.created_at), updatedAt: date(row.updated_at) };
 }
@@ -71,9 +102,29 @@ export class PostgresJournolRepository implements JournolRepository {
   async unsaveStoryForUser(userId: Id, savedStoryId: Id) { const result = await this.pool.query("DELETE FROM saved_stories WHERE id = $1 AND user_id = $2", [savedStoryId, userId]); return result.rowCount === 1; }
   async listSavedStoriesForUser(userId: Id) { const result = await this.pool.query("SELECT * FROM saved_stories WHERE user_id = $1 ORDER BY saved_at DESC", [userId]); return result.rows.map(savedStoryFromRow); }
   async getSourceArticle(id: Id) { const result = await this.pool.query("SELECT * FROM source_articles WHERE id = $1", [id]); return result.rows[0] ? articleFromRow(result.rows[0]) : null; }
-  async createSourceArticle(input: CreateSourceArticleInput) { const result = await this.pool.query("INSERT INTO source_articles (id, owner_user_id, original_url, canonical_url, title, publisher, published_at, extracted_text, content_hash, retrieval_status, retrieved_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *", [randomUUID(), input.ownerUserId, input.originalUrl, input.canonicalUrl, input.title, input.publisher, input.publishedAt ?? null, input.extractedText, input.contentHash, input.retrievalStatus, input.retrievedAt]); return articleFromRow(result.rows[0]); }
+  async createSourceArticle(input: CreateSourceArticleInput) {
+    const result = await this.pool.query(
+      "INSERT INTO source_articles (id, owner_user_id, original_url, canonical_url, title, publisher, published_at, extracted_text, content_hash, retrieval_status, retrieved_at, source_kind, file_name, mime_type, byte_size, page_count, extraction_method, extraction_notes, text_truncated) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb,$19) RETURNING *",
+      [randomUUID(), input.ownerUserId, input.originalUrl, input.canonicalUrl, input.title, input.publisher, input.publishedAt ?? null, input.extractedText, input.contentHash, input.retrievalStatus, input.retrievedAt, input.sourceKind ?? "web_article", input.fileName ?? null, input.mimeType ?? null, input.byteSize ?? null, input.pageCount ?? null, input.extractionMethod ?? null, JSON.stringify(input.extractionNotes ?? []), input.textTruncated ?? false],
+    );
+    return articleFromRow(result.rows[0]);
+  }
   async attachSourceToInvestigation(input: { investigationId: Id; sourceArticleId: Id; addedByUserId: Id }) { await this.pool.query("INSERT INTO investigation_source_articles (investigation_id, source_article_id, added_by_user_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING", [input.investigationId, input.sourceArticleId, input.addedByUserId]); }
   async investigationHasSource(investigationId: Id, sourceArticleId: Id) { const result = await this.pool.query("SELECT 1 FROM investigation_source_articles WHERE investigation_id = $1 AND source_article_id = $2", [investigationId, sourceArticleId]); return result.rowCount === 1; }
+  async listInvestigationSources(investigationId: Id) {
+    const result = await this.pool.query("SELECT s.*, l.added_by_user_id AS attachment_added_by_user_id, l.created_at AS attachment_created_at FROM investigation_source_articles l JOIN source_articles s ON s.id = l.source_article_id WHERE l.investigation_id = $1 ORDER BY l.created_at ASC", [investigationId]);
+    return result.rows.map((row) => sourceSummary(articleFromRow(row), String(row.attachment_added_by_user_id), date(row.attachment_created_at)));
+  }
+  async findOwnedSourceByContentHash(ownerUserId: Id, contentHash: string, sourceKind: SourceArticle["sourceKind"]) { const result = await this.pool.query("SELECT * FROM source_articles WHERE owner_user_id = $1 AND content_hash = $2 AND source_kind = $3 ORDER BY created_at ASC LIMIT 1", [ownerUserId, contentHash, sourceKind]); return result.rows[0] ? articleFromRow(result.rows[0]) : null; }
+  async getSourceUsage(investigationId: Id, sourceArticleId: Id): Promise<SourceUsage> {
+    const result = await this.pool.query(
+      "SELECT EXISTS (SELECT 1 FROM investigative_leads WHERE investigation_id = $1 AND source_article_id = $2) AS lead, EXISTS (SELECT 1 FROM deep_research_reports WHERE investigation_id = $1 AND source_article_id = $2) AS deep_research, EXISTS (SELECT 1 FROM claim_evidence e JOIN investigation_claims c ON c.id = e.claim_id WHERE c.investigation_id = $1 AND e.source_article_id = $2) AS claim_evidence",
+      [investigationId, sourceArticleId],
+    );
+    const row = result.rows[0] ?? {};
+    return { lead: row.lead === true, deepResearch: row.deep_research === true, claimEvidence: row.claim_evidence === true };
+  }
+  async detachSourceFromInvestigation(investigationId: Id, sourceArticleId: Id) { const result = await this.pool.query("DELETE FROM investigation_source_articles WHERE investigation_id = $1 AND source_article_id = $2", [investigationId, sourceArticleId]); return result.rowCount === 1; }
   async createLeadVersion(input: CreateLeadInput) {
     const client = await this.pool.connect();
 
@@ -205,6 +256,70 @@ export class PostgresJournolRepository implements JournolRepository {
   async restartFailedAiOperation(operationId: Id) { const result = await this.pool.query("UPDATE ai_operations SET status = 'pending', provider_request_id = NULL, error_code = NULL WHERE id = $1 AND status = 'failed' RETURNING *", [operationId]); return result.rows[0] ? operationFromRow(result.rows[0]) : null; }
   async restartStalePendingAiOperation(operationId: Id, staleBefore: Date) { const result = await this.pool.query("UPDATE ai_operations SET provider_request_id = NULL, error_code = NULL WHERE id = $1 AND status = 'pending' AND updated_at < $2 RETURNING *", [operationId, staleBefore]); return result.rows[0] ? operationFromRow(result.rows[0]) : null; }
   async finishAiOperation(input: { operationId: Id; status: Exclude<AiOperationStatus, "pending">; providerRequestId?: string; errorCode?: string }) { const result = await this.pool.query("UPDATE ai_operations SET status = $2, provider_request_id = COALESCE($3, provider_request_id), error_code = COALESCE($4, error_code) WHERE id = $1 RETURNING *", [input.operationId, input.status, input.providerRequestId ?? null, input.errorCode ?? null]); return result.rows[0] ? operationFromRow(result.rows[0]) : null; }
+  async listClaimsWithEvidence(investigationId: Id): Promise<ClaimWithEvidence[]> {
+    const claims = await this.pool.query("SELECT * FROM investigation_claims WHERE investigation_id = $1 ORDER BY created_at ASC, id ASC", [investigationId]);
+    if (!claims.rows.length) return [];
+    const ids = claims.rows.map((row) => String(row.id));
+    const [evidence, history] = await Promise.all([
+      this.pool.query("SELECT * FROM claim_evidence WHERE claim_id = ANY($1::uuid[]) ORDER BY created_at ASC, id ASC", [ids]),
+      this.pool.query("SELECT * FROM claim_verdict_events WHERE claim_id = ANY($1::uuid[]) ORDER BY created_at ASC, id ASC", [ids]),
+    ]);
+    return claims.rows.map((row) => {
+      const claim = claimFromRow(row);
+      return {
+        ...claim,
+        evidence: evidence.rows.filter((item) => String(item.claim_id) === claim.id).map(claimEvidenceFromRow),
+        history: history.rows.filter((item) => String(item.claim_id) === claim.id).map(verdictEventFromRow),
+      };
+    });
+  }
+  async getClaim(id: Id) { const result = await this.pool.query("SELECT * FROM investigation_claims WHERE id = $1", [id]); return result.rows[0] ? claimFromRow(result.rows[0]) : null; }
+  async createClaim(input: CreateClaimInput) { const result = await this.pool.query("INSERT INTO investigation_claims (id, investigation_id, statement, origin, origin_key, created_by_user_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *", [randomUUID(), input.investigationId, input.statement, input.origin, input.originKey, input.createdByUserId]); return claimFromRow(result.rows[0]); }
+  async createClaimsIfAbsent(inputs: CreateClaimInput[]) {
+    if (!inputs.length) return [];
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const created: InvestigationClaim[] = [];
+      for (const input of inputs) {
+        const result = await client.query("INSERT INTO investigation_claims (id, investigation_id, statement, origin, origin_key, created_by_user_id) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (investigation_id, origin_key) WHERE origin_key IS NOT NULL DO NOTHING RETURNING *", [randomUUID(), input.investigationId, input.statement, input.origin, input.originKey, input.createdByUserId]);
+        if (result.rows[0]) created.push(claimFromRow(result.rows[0]));
+      }
+      await client.query("COMMIT");
+      return created;
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  }
+  async updateClaimStatement(id: Id, statement: string) { const result = await this.pool.query("UPDATE investigation_claims SET statement = $2 WHERE id = $1 RETURNING *", [id, statement]); return result.rows[0] ? claimFromRow(result.rows[0]) : null; }
+  async setClaimVerdict(input: SetClaimVerdictInput) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query("UPDATE investigation_claims SET verdict = $2, verdict_rationale = $3, verdict_set_by_user_id = $4, verdict_set_at = now() WHERE id = $1 RETURNING *", [input.claimId, input.verdict, input.rationale, input.setByUserId]);
+      if (!result.rows[0]) { await client.query("ROLLBACK"); return null; }
+      await client.query("INSERT INTO claim_verdict_events (id, claim_id, verdict, rationale, set_by_user_id) VALUES ($1,$2,$3,$4,$5)", [randomUUID(), input.claimId, input.verdict, input.rationale, input.setByUserId]);
+      await client.query("COMMIT");
+      return claimFromRow(result.rows[0]);
+    } catch (error) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+  }
+  async deleteClaim(id: Id) { const result = await this.pool.query("DELETE FROM investigation_claims WHERE id = $1", [id]); return result.rowCount === 1; }
+  async listClaimEvidence(claimId: Id) { const result = await this.pool.query("SELECT * FROM claim_evidence WHERE claim_id = $1 ORDER BY created_at ASC, id ASC", [claimId]); return result.rows.map(claimEvidenceFromRow); }
+  async getClaimEvidence(id: Id) { const result = await this.pool.query("SELECT * FROM claim_evidence WHERE id = $1", [id]); return result.rows[0] ? claimEvidenceFromRow(result.rows[0]) : null; }
+  async addClaimEvidence(input: CreateClaimEvidenceInput) { const result = await this.pool.query("INSERT INTO claim_evidence (id, claim_id, evidence_kind, stance, source_article_id, url, title, record_type, excerpt, note, excerpt_found_in_source, added_by_user_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *", [randomUUID(), input.claimId, input.evidenceKind, input.stance, input.sourceArticleId, input.url, input.title, input.recordType, input.excerpt, input.note, input.excerptFoundInSource, input.addedByUserId]); return claimEvidenceFromRow(result.rows[0]); }
+  async deleteClaimEvidence(id: Id) { const result = await this.pool.query("DELETE FROM claim_evidence WHERE id = $1", [id]); return result.rowCount === 1; }
+  async createPublicRecordLookup(input: CreatePublicRecordLookupInput) { const result = await this.pool.query("INSERT INTO public_record_lookups (id, investigation_id, query, record_types, results, outcomes, created_by_user_id) VALUES ($1,$2,$3,$4::jsonb,$5::jsonb,$6::jsonb,$7) RETURNING *", [randomUUID(), input.investigationId, input.query, JSON.stringify(input.recordTypes), JSON.stringify(input.results), JSON.stringify(input.outcomes), input.createdByUserId]); return lookupFromRow(result.rows[0]); }
+  async listPublicRecordLookups(investigationId: Id, limit: number) { const result = await this.pool.query("SELECT * FROM public_record_lookups WHERE investigation_id = $1 ORDER BY created_at DESC LIMIT $2", [investigationId, limit]); return result.rows.map(lookupFromRow); }
+  async searchProcurementAwards(query: string, limit: number) {
+    const normalized = query.trim().toLowerCase();
+    const result = await this.pool.query(
+      // Exact substring matches first, then fuzzy matches on the best-matching
+      // part of the text (word similarity), which tolerates "Ltd"/"Limited" and
+      // small spelling differences in contractor names. Both use the trigram index.
+      "SELECT * FROM procurement_awards WHERE search_text ILIKE $1 OR $2 <% search_text ORDER BY (search_text ILIKE $1) DESC, word_similarity($2, search_text) DESC, award_date DESC NULLS LAST LIMIT $3",
+      [likePattern(normalized), normalized, limit],
+    );
+    return result.rows.map(awardFromRow);
+  }
+  async getLatestProcurementIngestion(publication: string) { const result = await this.pool.query("SELECT finished_at, awards_upserted, source_file FROM procurement_ingestion_runs WHERE publication = $1 AND status = 'succeeded' ORDER BY finished_at DESC LIMIT 1", [publication]); const row = result.rows[0]; return row ? { finishedAt: date(row.finished_at), awardsUpserted: Number(row.awards_upserted), sourceFile: String(row.source_file) } : null; }
   async recordUsage(input: RecordUsageInput) { const result = await this.pool.query("INSERT INTO usage_records (id, user_id, operation_id, stage, model, status, input_tokens, output_tokens, estimated_cost_micros) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *", [randomUUID(), input.userId, input.operationId, input.stage, input.model, input.status, input.inputTokens, input.outputTokens, input.estimatedCostMicros]); return usageFromRow(result.rows[0]); }
 }
 

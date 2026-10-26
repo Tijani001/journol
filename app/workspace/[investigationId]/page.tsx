@@ -8,6 +8,7 @@ import { isDatabaseConfigured } from "@/lib/server/database";
 import { getPostgresRepository } from "@/lib/server/postgres-repository";
 import { AuthorizationError, requireInvestigationAccess } from "@/lib/server/authorization";
 import { AuthControls } from "@/app/auth-controls";
+import { InvestigationDesk } from "@/app/workspace/desk/investigation-desk";
 
 type InvestigationPageProps = {
   params: Promise<{
@@ -123,12 +124,14 @@ export default async function InvestigationPage({
 
       <section className="mt-6 rounded-lg border p-5">
         <h2 className="text-lg font-semibold">Saved investigation</h2>
-        {source && <p className="mt-2 text-sm"><a className="underline" href={source.originalUrl} rel="noreferrer" target="_blank">{source.title || "Original source"}</a>{source.publisher ? ` · ${source.publisher}` : ""}</p>}
+        {source && <p className="mt-2 text-sm">{source.originalUrl ? <a className="underline" href={source.originalUrl} rel="noreferrer" target="_blank">{source.title || "Original source"}</a> : <span>{source.title || source.fileName || "Uploaded document"}</span>}{source.publisher ? ` · ${source.publisher}` : ""}</p>}
         {lead && <div className="mt-4"><h3 className="font-medium">Investigative lead</h3><p className="mt-1 text-sm">{typeof lead.content.primaryLead === "string" ? lead.content.primaryLead : "Saved lead"}</p></div>}
         {assessment && <p className="mt-4 text-sm text-slate-600">Evidence assessment saved.</p>}
         {plan && <div className="mt-4"><h3 className="font-medium">Investigation plan</h3><p className="mt-1 text-sm">{typeof plan.content.investigativeObjective === "string" ? plan.content.investigativeObjective : "Saved plan"}</p></div>}
         {!lead && <p className="mt-3 text-sm text-slate-600">No lead has been saved yet.</p>}
       </section>
+
+      <InvestigationDesk investigationId={investigation.id} hasPlan={Boolean(investigation.currentPlanId)} />
 
       <section className="mt-6 rounded-lg border p-5">
         <h2 className="text-lg font-semibold">Workflow</h2>
