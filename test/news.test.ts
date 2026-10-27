@@ -1,51 +1,43 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { setIdentityResolverForTesting } from "@/lib/server/auth";
+import { describe, expect, it } from "vitest";
+import { classifyTopics, normalizeFeedItems, selectStories, shortSummary, timeAgo } from "@/lib/news";
 
-const parseURL = vi.fn();
-vi.mock("rss-parser", () => ({ default: class Parser { parseURL = parseURL; } }));
+const source = { publisher: "Punch", feedUrl: "https://punchng.com/feed/" };
 
-beforeEach(() => {
-  setIdentityResolverForTesting(async () => ({
-    issuer: "https://identity.test",
-    subject: "journalist_123",
-    email: null,
-  }));
-});
+describe("today's stories", () => {
+  it("cleans feed items", () => {
+    const [story] = normalizeFeedItems(source, [
+      { link: "https://punchng.com/a/", title: "Lagos raises bridge toll &#8211; to &#8358;500", contentSnippet: "The state says the money will fund repairs. The post Lagos raises toll appeared first on Punch.", isoDate: "2026-10-27T07:00:00Z" },
+      { link: "", title: "No link" },
+      { link: "javascript:void(0)", title: "Bad" },
+    ]);
+    expect(story).toMatchObject({ url: "https://punchng.com/a/", title: "Lagos raises bridge toll – to ₦500", summary: "The state says the money will fund repairs.", publisher: "Punch" });
+    expect(story.topics).toContain("Money");
+  });
 
-afterEach(() => {
-  parseURL.mockReset();
-  setIdentityResolverForTesting(null);
-});
+  it("tags topics from the headline and summary", () => {
+    expect(classifyTopics("Kano hires 4,000 teachers for rural schools")).toEqual(["Education"]);
+    expect(classifyTopics("Gunmen abduct 12 in Zamfara")).toEqual(["Security"]);
+    expect(classifyTopics("FG to build clinics with ₦4.5bn")).toEqual(expect.arrayContaining(["Health", "Money"]));
+  });
 
-it("reports partial RSS-feed failures without discarding successful feeds", async () => {
-  parseURL
-    .mockResolvedValueOnce({ items: [{ guid: "a", title: "First", link: "https://example.test/a", isoDate: "2026-01-01" }] })
-    .mockRejectedValueOnce(new Error("unavailable"))
-    .mockResolvedValueOnce({ items: [] })
-    .mockResolvedValueOnce({ items: [] })
-    .mockResolvedValueOnce({ items: [] });
-  const { GET } = await import("@/app/api/news/route");
-  const response = await GET(new Request("http://test/api/news"));
-  const body = await response.json();
-  expect(response.status).toBe(200);
-  expect(body.count).toBe(1);
-  expect(body.sourcesAvailable).toBe(4);
-  expect(body.unavailableSources).toEqual(["The Guardian Nigeria"]);
-});
+  it("keeps recent, unique stories, newest first", () => {
+    const now = new Date("2026-10-27T12:00:00Z");
+    const make = (url: string, publishedAt: string | null) => ({ url, title: url, publisher: "P", publishedAt, summary: "", topics: [] });
+    const picked = selectStories([
+      make("https://a.example/1", "2026-10-27T08:00:00Z"),
+      make("https://a.example/1/", "2026-10-27T08:00:00Z"),
+      make("https://a.example/2", "2026-10-27T10:00:00Z"),
+      make("https://a.example/old", "2026-10-20T10:00:00Z"),
+      make("https://a.example/undated", null),
+    ], { now });
+    expect(picked.map((story) => story.url)).toEqual(["https://a.example/2", "https://a.example/1", "https://a.example/undated"]);
+  });
 
-it("returns a safe upstream failure when every RSS feed fails", async () => {
-  parseURL.mockRejectedValue(new Error("unavailable"));
-  const { GET } = await import("@/app/api/news/route");
-  const response = await GET(new Request("http://test/api/news"));
-  expect(response.status).toBe(502);
-  expect((await response.json()).code).toBe("UPSTREAM_FAILURE");
-});
-
-it("requires a verified session before returning dashboard discoveries", async () => {
-  setIdentityResolverForTesting(async () => null);
-  const { GET } = await import("@/app/api/news/route");
-  const response = await GET(new Request("http://test/api/news"));
-  expect(response.status).toBe(401);
-  expect((await response.json()).code).toBe("UNAUTHORIZED");
-  expect(parseURL).not.toHaveBeenCalled();
+  it("writes short summaries and friendly times", () => {
+    expect(shortSummary("One sentence here that is quite long. ".repeat(10), 120)).toBe("One sentence here that is quite long. One sentence here that is quite long. One sentence here that is quite long.");
+    const now = new Date("2026-10-27T12:00:00Z");
+    expect(timeAgo("2026-10-27T10:00:00Z", now)).toBe("2 hours ago");
+    expect(timeAgo("2026-10-27T11:59:30Z", now)).toBe("just now");
+    expect(timeAgo("2026-10-26T10:00:00Z", now)).toBe("yesterday");
+  });
 });

@@ -1,98 +1,55 @@
+import "server-only";
+
 import { cache } from "react";
-import { auth as clerkAuth } from "@clerk/nextjs/server";
-import { apiError } from "@/lib/api";
-import type { User } from "@/lib/domain/types";
-import type { JournolRepository } from "@/lib/server/repository";
+import { auth } from "@clerk/nextjs/server";
+import { connection } from "next/server";
+import { redirect } from "next/navigation";
 import { isClerkConfigured } from "@/lib/server/clerk-config";
+import { upsertUser } from "@/lib/server/store";
 
-export type VerifiedIdentity = {
-  issuer: string;
-  subject: string;
-  email: string | null;
-};
-
-export class AuthenticationRequiredError extends Error {
-  constructor() {
-    super("AUTHENTICATION_REQUIRED");
-  }
-}
+export type Identity = { issuer: string; subject: string };
 
 /**
- * Provider seam. Replace this resolver with a verified managed-provider
- * session reader; do not pass identity from route JSON or client state.
+ * The signed-in journalist, from Clerk's verified server session. In local
+ * development without Clerk keys, JOURNOL_DEV_USER_ID stands in for a user.
+ * Identity never comes from request bodies or the browser.
  */
-export type IdentityResolver = () => Promise<VerifiedIdentity | null>;
-
-async function resolveDevelopmentIdentity(): Promise<VerifiedIdentity | null> {
-  if (process.env.NODE_ENV === "production") return null;
-  const subject = process.env.JOURNOL_DEV_USER_ID?.trim();
-  if (!subject) return null;
-  return { issuer: "journol-development", subject, email: null };
-}
-
-async function resolveClerkIdentity(): Promise<VerifiedIdentity | null> {
-  if (!isClerkConfigured()) return resolveDevelopmentIdentity();
-
+export async function currentIdentity(): Promise<Identity | null> {
+  // Who is signed in is only known per request, so nothing that depends on it is prerendered.
+  await connection();
+  if (!isClerkConfigured()) {
+    if (process.env.NODE_ENV === "production") return null;
+    const subject = process.env.JOURNOL_DEV_USER_ID?.trim();
+    return subject ? { issuer: "journol-development", subject } : null;
+  }
   try {
-    const session = await clerkAuth();
+    const session = await auth();
     if (!session.userId) return null;
-    const claims = session.sessionClaims as { iss?: unknown } | null;
-    const issuer = typeof claims?.iss === "string" ? claims.iss : "";
-    if (!issuer) return null;
-    // `userId` and `iss` come from Clerk's verified server session, not a
-    // request payload. Email is intentionally not copied into Journol here.
-    return { issuer, subject: session.userId, email: null };
+    const issuer = (session.sessionClaims as { iss?: unknown } | null)?.iss;
+    return { issuer: typeof issuer === "string" && issuer ? issuer : "clerk", subject: session.userId };
   } catch {
-    // A protected handler remains fail-closed through requireCurrentUser().
     return null;
   }
 }
 
-let identityResolver: IdentityResolver = resolveClerkIdentity;
+let resolverForTesting: (() => Promise<Identity | null>) | null = null;
 
-/** Test-only registration point; production integrations should configure a resolver at startup. */
-export function setIdentityResolverForTesting(resolver: IdentityResolver | null) {
-  if (process.env.NODE_ENV === "production") throw new Error("Identity resolver cannot be changed in production.");
-  identityResolver = resolver ?? resolveClerkIdentity;
+/** Test-only seam. */
+export function setIdentityForTesting(resolver: (() => Promise<Identity | null>) | null) {
+  if (process.env.NODE_ENV === "production") throw new Error("Not available in production.");
+  resolverForTesting = resolver;
 }
 
-export async function getCurrentIdentity(): Promise<VerifiedIdentity | null> {
-  return identityResolver();
-}
-
-/** Maps a verified external subject to Journol's internal user record. */
-export async function getCurrentUser(repository: JournolRepository): Promise<User | null> {
-  const identity = await getCurrentIdentity();
+/** Journol's internal user id for the signed-in journalist, created on first use. */
+export const currentUserId = cache(async (): Promise<string | null> => {
+  const identity = resolverForTesting ? await resolverForTesting() : await currentIdentity();
   if (!identity) return null;
-  return repository.getUserByIdentity(identity.issuer, identity.subject);
-}
+  return upsertUser(identity.issuer, identity.subject);
+});
 
-/**
- * Creates the internal mapping only after a provider identity has been
- * verified on the server. Use this during a provider callback or first signed-
- * in request, never from a client-supplied profile payload.
- */
-export async function getOrCreateCurrentUser(repository: JournolRepository): Promise<User | null> {
-  const identity = await getCurrentIdentity();
-  if (!identity) return null;
-  const existing = await repository.getUserByIdentity(identity.issuer, identity.subject);
-  return existing ?? repository.createUser({
-    authIssuer: identity.issuer,
-    authSubject: identity.subject,
-    email: identity.email,
-  });
+/** For pages: the signed-in journalist's id, or a redirect to sign in that comes back here. */
+export async function requireUserId(returnTo: string): Promise<string> {
+  const userId = await currentUserId();
+  if (!userId) redirect(`/sign-in?redirect_url=${encodeURIComponent(returnTo)}`);
+  return userId;
 }
-
-export async function requireCurrentUser(repository: JournolRepository): Promise<User> {
-  const user = await getCurrentUser(repository);
-  if (!user) throw new AuthenticationRequiredError();
-  return user;
-}
-
-/** Safe adapter for route handlers that choose to catch authentication errors. */
-export function authenticationErrorResponse() {
-  return apiError("UNAUTHORIZED", "Authentication is required for this endpoint.", 401);
-}
-
-// Prevent accidental request-local resolver work from being repeated in future server components.
-export const getCachedCurrentIdentity = cache(getCurrentIdentity);

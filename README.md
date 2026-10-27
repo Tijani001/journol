@@ -1,100 +1,61 @@
 # Journol
 
-Journol turns supplied news material into a proposed investigative lead, an evidence assessment, and a practical verification plan. A lead is never proof of the underlying claim.
+Journol helps journalists find new angles and leads in stories that are already published.
 
-## Local development
+Paste a link, or pick one of today's stories. Journol then:
 
-First, run the development server:
+1. **Reads the story** and keeps its paragraphs.
+2. **Searches the web** for related coverage: other outlets on the same event, earlier reporting on the people and companies named, and how similar promises turned out. Copies of the same report or press release count once.
+3. **Finds what the story leaves open.** These are numbered gaps, each tied to the story's own words or to a related report.
+4. **Suggests three angles to chase.** Each one says why it matters and gives three first steps, where to look, who to ask, and whether anyone has already reported it. "Show different angles" gives up to two more sets.
+
+Journalists can save angles to **My angles**, tick off steps, and mark each angle as New, Reporting or Published.
+
+## What keeps the angles honest
+
+The server checks every model answer before anyone sees it (`lib/engine/grounding.ts`):
+
+- A quotation must appear in the story, and is shown in the story's own wording.
+- A gap or angle must rest on the story or on a report the search actually found. Angles that cite made-up report ids are dropped.
+- An angle can't mention a year unless it appears in the story, in a report the angle cites, or is the current year.
+- **"Not yet reported"** only appears when the web search ran. **"Partly covered"** needs a linked report. If the search couldn't run, neither label is shown.
+- A new set of angles can't repeat a question already shown.
+
+## Run it locally
 
 ```bash
+npm ci
+cp .env.example .env.local   # fill in the keys
+npm run db:migrate
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-Create a local environment file without committing it. `OPENAI_API_KEY` is required only for the AI workflow; never expose it to the browser.
-
-## Authentication and persistence
-
-Story discovery is available from the landing page. Creating an investigation,
-retrieving a source for it, and progressing through the staged editorial
-workflow require an authenticated Clerk session and PostgreSQL. Clerk supplies
-verified session identity; Supabase is used only as managed PostgreSQL. See
-[Clerk and PostgreSQL setup](docs/clerk-postgres-setup.md) for the required
-environment variable names, setup steps, and migration workflow.
-
-The browser now uses the investigation-scoped workflow routes. The older
-`/api/assess-evidence` and `/api/build-investigation` routes remain only as
-backward-compatible, access-guarded legacy handlers while downstream callers
-are retired; new UI work must not call them.
-
-## Deep Research
-
-After Journol has retrieved an article and generated its initial investigative
-lead, journalists can optionally open **Deep Research** in the same lead
-dialogue. It searches a bounded set of external, public result metadata,
-then produces a source-attributed report covering historical context, related
-incidents, evidence status, contradictions, auditable numerical comparisons,
-evidence gaps, and reporting opportunities. It never runs automatically and
-never treats search snippets as verified facts. A matching citation proves
-only that a finding is linked to retrieved material; journalists must inspect
-the original source before treating it as independently established.
-
-Deep Research requires the server-only `TAVILY_API_KEY` in addition to
-`OPENAI_API_KEY`. Without a configured search provider, Journol shows a clear
-configuration message and does not fabricate a research report. Completed
-reports are tied to the authenticated user's investigation and source article,
-and are reused for the same source and research instructions.
-
-For a closed beta, configure Clerk in **Restricted** sign-up mode and invite
-each journalist. The investigation-scoped AI routes use the verified Clerk
-session and server-side ownership checks; no browser-supplied identity or
-shared bearer token authorizes them. Configure a shared Redis-compatible rate
-limiter using `JOURNOL_RATE_LIMIT_REDIS_URL`,
-`JOURNOL_RATE_LIMIT_REDIS_TOKEN`, and
-`JOURNOL_REQUIRE_SHARED_RATE_LIMIT=true`. Production fails closed without the
-shared limiter. Set `JOURNOL_TRUST_PROXY=true` only for a proxy deployment
-whose forwarding headers are trusted.
-
-Before deployment, configure the production Clerk application and database,
-set an OpenAI project hard spend limit, deploy behind HTTPS, configure
-observability, and run lint, type checks, tests, and a production build in CI.
-See [the closed-beta deployment guide](docs/deployment-beta.md).
+Without Clerk keys, set `JOURNOL_DEV_USER_ID=anything` in `.env.local` to use the app as a local user (development only).
 
 ## Checks
 
 ```bash
 npm run lint
-npx tsc --noEmit --incremental false
-npm test
+npx tsc --noEmit
+npm test                                   # unit tests
+TEST_DATABASE_URL=postgres://… npm test    # also runs route tests against an empty, migrated database
 npm run build
 ```
 
-The mocked test suite covers validation, SSRF safeguards, rate limiting,
-identity mapping, ownership, workflow handoff, idempotency, and defensive
-client response parsing. Extend it alongside each new workflow transition.
+## Layout
 
-## Learn more
+| Path | What it does |
+| --- | --- |
+| `app/page.tsx` | Discover: paste a link, or start from today's stories (publisher RSS feeds, cached 15 minutes) |
+| `app/read` | Shows progress while a story is analysed |
+| `app/story/[analysisId]` | The story with numbered gaps, related sources and angles |
+| `app/angle/[angleId]` | One angle: steps, where to look, who to ask, coverage, and the reporting brief |
+| `app/angles` | My angles |
+| `app/api/analyses` | Reads, searches and analyses a story, streaming progress |
+| `app/api/analyses/[id]/angles` | A different set of angles |
+| `app/api/angles/[id]` | Saving an angle, its status and its steps |
+| `lib/engine` | The angle engine: prompts, related-coverage search and grounding checks |
+| `lib/server` | Article reader (SSRF-safe), database, sign-in and the daily allowance |
+| `db/migrations` | Database schema |
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+API keys stay on the server. Every analysis and angle is tied to the journalist who is signed in.

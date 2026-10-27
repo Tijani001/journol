@@ -28,7 +28,6 @@
     "undici": "^8.11.2"
   },
   "devDependencies": {
-    "@tailwindcss/turbopack": "^4",
     "@types/jsdom": "^30.0.0",
     "@types/node": "^20",
     "@types/pg": "^8.23.1",
@@ -36,8 +35,8 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.4.0",
-    "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^3.2.4"
-  }
+  },
+  "description": "Journol helps journalists find new angles in stories that are already published."
 }
