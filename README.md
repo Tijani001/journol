@@ -38,6 +38,25 @@ The browser now uses the investigation-scoped workflow routes. The older
 backward-compatible, access-guarded legacy handlers while downstream callers
 are retired; new UI work must not call them.
 
+## Finding angles
+
+When a journalist analyses a story, Journol reads it in two passes. First it
+lists what the story leaves open: claims without evidence, figures without a
+source, names left unexplained, people never heard from, promises and
+deadlines that can be checked, and things that don't add up. Each gap quotes
+the passage it rests on; a quotation that cannot be found in the stored
+article is dropped. Then it proposes three or four distinct angles built on
+those gaps, each of a different kind (follow the money, who benefits, promise
+vs delivery, missing voices, and so on), with a first step and places to look.
+
+Every angle is checked on the server before it is shown: it must have a
+factual basis in the story, must not repeat an angle the journalist turned
+down, and must not introduce a year the story does not contain. A weak angle
+is dropped on its own rather than failing the set; if none survives, Journol
+asks the model for one correction. The angles are stored together as
+proposed leads; choosing one approves it and points Deep Research at it.
+"Show different angles" asks again, excluding every angle already shown.
+
 ## Deep Research
 
 After Journol has retrieved an article and generated its initial investigative

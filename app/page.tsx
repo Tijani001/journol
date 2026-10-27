@@ -11,6 +11,8 @@ import { contextualSuggestions, filterArticles } from "@/lib/news-discovery";
 import { countActiveFilters, nextFilterPopoverState, toggleFilterSelection } from "@/lib/editorial-radar-filters";
 import { DEEP_RESEARCH_SOURCE_REQUIRED_MESSAGE, nextDeepResearchPanelState, persistedSourceState } from "@/lib/deep-research-ui";
 import { normalizeStoryUrl } from "@/lib/story-url";
+import { AnglePicker } from "@/app/angle-picker";
+import { angleSetFromSelectionResponse, angleSetFromWorkflow, deepResearchFocusFor, type ClientAngle, type ClientAngleSet } from "@/lib/client/angle-set";
 type NewsArticle = {
   id: string;
   title: string;
@@ -480,6 +482,12 @@ const [newsError, setNewsError] = useState("");
   const [aiAnalysis, setAiAnalysis] = useState<LegacyAnalysis | null>(null);
   const [proposedLead, setProposedLead] = useState<LeadProposal | null>(null);
   const [leadApproved, setLeadApproved] = useState(false);
+  // The gaps and angles Journol found in the current story; proposedLead is
+  // the angle the journalist chose from it.
+  const [angleSet, setAngleSet] = useState<ClientAngleSet | null>(null);
+  const [choosingLeadId, setChoosingLeadId] = useState<string | null>(null);
+  const [rejectedAngleQuestions, setRejectedAngleQuestions] = useState<string[]>([]);
+  const autoFocusInstructions = useRef("");
   const [investigationPlan, setInvestigationPlan] = useState<InvestigationPlan | null>(null);
   const [isBuildingInvestigation, setIsBuildingInvestigation] = useState(false);
   const [investigationError, setInvestigationError] = useState("");
@@ -529,6 +537,7 @@ const [newsError, setNewsError] = useState("");
       setInvestigationPlan(null);
       setProposedLead(null);
       setLeadApproved(false);
+      setAngleSet(null);
       setDeepResearch(null);
       setShowDeepResearchForm(false);
       setSourceArticleId(null);
@@ -537,12 +546,15 @@ const [newsError, setNewsError] = useState("");
         const data = await readApiResponse(response, "Loading investigation state");
         if (cancelled || requestId !== workflowRequestId.current || !data.workflow || typeof data.workflow !== "object") return;
         const workflow = data.workflow as Record<string, unknown>;
-        const lead = workflow.lead as Record<string, unknown> | null;
         const plan = workflow.plan as Record<string, unknown> | null;
 
-        if (lead && typeof lead.id === "string" && lead.content && typeof lead.content === "object") {
-          setProposedLead({ ...(lead.content as Record<string, unknown>), leadId: lead.id } as LeadProposal);
-          setLeadApproved(lead.status === "approved");
+        const restoredAngles = angleSetFromWorkflow(workflow);
+        if (restoredAngles) {
+          setAngleSet(restoredAngles.set);
+          if (restoredAngles.chosen) {
+            setProposedLead(restoredAngles.chosen as unknown as LeadProposal);
+            setLeadApproved(true);
+          }
         }
         const persistedSource = persistedSourceState(data.source);
         // A new investigation is loaded before article retrieval and lead
@@ -640,7 +652,7 @@ const [newsError, setNewsError] = useState("");
   }, [authenticationLoaded, isSignedIn]);
   const analyzeLead = async (
     lead: Story,
-    rejectedLead?: string,
+    rejectedLeads?: string[],
     suppliedArticle?: { text: string; title?: string }
   ) => {
   if (!authenticationLoaded) {
@@ -668,6 +680,8 @@ const [newsError, setNewsError] = useState("");
     setDeepResearchError(null);
     setProposedLead(null);
     setLeadApproved(false);
+    setAngleSet(null);
+    if (!rejectedLeads) setRejectedAngleQuestions([]);
   setInvestigationPlan(null);
 
   let articleText = "";
@@ -768,7 +782,7 @@ const [newsError, setNewsError] = useState("");
     body: JSON.stringify({
       investigationId: activeInvestigationId,
       sourceArticleId,
-      rejectedLead: rejectedLead || "",
+      rejectedLeads: rejectedLeads ?? [],
     }),
   });
 
@@ -776,39 +790,14 @@ const [newsError, setNewsError] = useState("");
   if (!isCurrent()) {
     return;
   }
-  if (
-    !selectionData ||
-    typeof selectionData.primaryLead !== "string" ||
-    !selectionData.primaryLead.trim()
-  ) {
-    throw new Error(
-      "Journol did not return a valid investigative question. Please try again."
-    );
-  }
-  
-  if (
-    typeof selectionData.leadRationale !== "string" ||
-    !selectionData.leadRationale.trim() ||
-    !Array.isArray(selectionData.evidencePath) ||
-    typeof selectionData.firstAction !== "string" ||
-    !selectionData.firstAction.trim()
-  ) {
-    throw new Error(
-      "Journol returned an incomplete investigative lead. Please try again."
-    );
-  }
-  if (!isCurrent()) return;
-  const validLead = selectionData as unknown as LeadProposal;
-  setProposedLead({
-    ...validLead,
-    articleTextAvailable: Boolean(articleText.trim()),
-    articleRetrievalNote: articleRetrievalNote || (
-      articleText.trim()
-        ? "Article text was retrieved, but completeness has not been independently established."
-        : "Full article text is unavailable. The analysis relies on the supplied headline, description, and other available context."
-    ),
-  });
-  showFeedback("success", "Investigative lead ready to review.");
+  const foundAngles = angleSetFromSelectionResponse(selectionData);
+  setAngleSet(foundAngles);
+  showFeedback(
+    foundAngles.outcome === "angles" ? "success" : "info",
+    foundAngles.outcome === "angles"
+      ? `${foundAngles.angles.length} angles ready. Pick one to pursue.`
+      : "This story doesn’t give Journol enough to suggest an angle yet.",
+  );
   return;
   
   
@@ -1032,7 +1021,6 @@ const filteredStories = discoverLeads(filterArticles(newsArticles, {
       const data = await readApiResponse(await fetch(`/api/investigations/${encodeURIComponent(investigationToOpen)}`, { cache: "no-store" }), "Saved investigation");
       if (requestId !== planOpenRequestId.current) return;
       const workflow = data.workflow as Record<string, unknown>;
-      const lead = workflow.lead as Record<string, unknown> | null;
       const plan = workflow.plan as Record<string, unknown> | null;
       const source = data.source as Record<string, unknown> | null;
       if (source) {
@@ -1051,7 +1039,10 @@ const filteredStories = discoverLeads(filterArticles(newsArticles, {
           accent: "#3730a3",
         });
       }
-      if (lead?.content && typeof lead.id === "string") setProposedLead({ ...(lead.content as Record<string, unknown>), leadId: lead.id } as LeadProposal);
+      const restoredAngles = angleSetFromWorkflow(workflow);
+      setAngleSet(restoredAngles?.set ?? null);
+      setProposedLead(restoredAngles?.chosen ? restoredAngles.chosen as unknown as LeadProposal : null);
+      setLeadApproved(Boolean(restoredAngles?.chosen));
       if (plan?.content) setInvestigationPlan(plan.content as InvestigationPlan);
       setCreatedInvestigationId(investigationToOpen);
       setInvestigationSourceUrl(typeof source?.originalUrl === "string" ? source.originalUrl : null);
@@ -1075,6 +1066,51 @@ const filteredStories = discoverLeads(filterArticles(newsArticles, {
         setOpeningSavedInvestigationId(null);
       }
     }
+  }
+
+  /** Records the journalist's chosen angle and points Deep Research at it. */
+  async function chooseAngle(angle: ClientAngle) {
+    const investigationForAngle = currentInvestigationId;
+    if (!investigationForAngle || choosingLeadId) return;
+    setChoosingLeadId(angle.leadId);
+    try {
+      const response = await fetch(
+        `/api/investigations/${encodeURIComponent(investigationForAngle)}/leads/${encodeURIComponent(angle.leadId)}/approve`,
+        { method: "POST", headers: { "Content-Type": "application/json" } },
+      );
+      const data = await readApiResponse(response, "Lead approval");
+      if (!data.success) throw new Error("Journol could not save your choice of angle.");
+      setProposedLead(angle as unknown as LeadProposal);
+      setLeadApproved(true);
+      setAngleSet((current) => current && {
+        ...current,
+        angles: current.angles.map((entry) => entry.leadId === angle.leadId ? { ...entry, status: "approved" } : entry),
+      });
+      // Point Deep Research at the angle, unless the journalist has written
+      // their own instructions.
+      setDeepResearchInstructions((current) => {
+        if (current.trim() && current !== autoFocusInstructions.current) return current;
+        autoFocusInstructions.current = deepResearchFocusFor(angle);
+        return autoFocusInstructions.current;
+      });
+      showFeedback("success", "Angle chosen. Deep Research will focus on it.");
+    } catch (error) {
+      showJournalistError(error, {
+        title: "Angle not saved",
+        detail: "Journol couldn’t save your choice of angle. Please try again.",
+        kind: "error",
+      });
+    } finally {
+      setChoosingLeadId(null);
+    }
+  }
+
+  function showDifferentAngles() {
+    if (!selectedLead || !angleSet) return;
+    const turnedDown = [...rejectedAngleQuestions, ...angleSet.angles.map((angle) => angle.primaryLead)].slice(-12);
+    setRejectedAngleQuestions(turnedDown);
+    setAiAnalysis(null);
+    void analyzeLead(selectedLead, turnedDown);
   }
 
   async function startDeepResearch() {
@@ -1718,53 +1754,18 @@ style={{
       </button>
     </div>
   )}
+{angleSet && (
+  <AnglePicker
+    set={angleSet}
+    chosenLeadId={proposedLead?.leadId ?? null}
+    choosingLeadId={choosingLeadId}
+    busy={isAnalyzing}
+    onChoose={(angle) => void chooseAngle(angle)}
+    onShowOthers={showDifferentAngles}
+  />
+)}
 {proposedLead && (
-  <div
-    style={{
-      marginBottom: "24px",
-      padding: "20px",
-      borderRadius: "12px",
-      background: "#eef2ff",
-      border: "1px solid #c7d2fe",
-    }}
-  >
-    <h3 style={{ marginTop: 0 }}>Proposed Investigative Lead</h3>
-
-    <p style={{ fontSize: "17px", fontWeight: 600, lineHeight: 1.6 }}>
-      {proposedLead.primaryLead}
-    </p>
-
-    <p style={{ lineHeight: 1.7 }}>
-      <strong>Why it matters:</strong> {proposedLead.leadRationale}
-    </p>
-
-    <p style={{ lineHeight: 1.7 }}>
-      <strong>Scope:</strong> {proposedLead.scope}
-    </p>
-
-    <p style={{ lineHeight: 1.7 }}>
-      <strong>First action:</strong> {proposedLead.firstAction}
-    </p>
-
-    <p>
-      <strong>Confidence:</strong> {proposedLead.confidence}
-    </p>
-
-    {proposedLead.missingInformation?.length > 0 && (
-      <div>
-        <strong>Information still needed:</strong>
-        <ul>
-          {proposedLead.missingInformation.map(
-            (item: string, index: number) => (
-              <li key={index} style={{ marginTop: "6px" }}>
-                {item}
-              </li>
-            )
-          )}
-        </ul>
-      </div>
-    )}
-
+  <div>
 <div style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginTop: "16px" }}>
   {false && <button
     onClick={async () => {
@@ -1942,32 +1943,10 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
       : leadApproved ? "Retry evidence & plan" : "Approve lead & build plan"}
   </button>}
 
-  <button
-    disabled={isAnalyzing || isBuildingInvestigation}
-    onClick={() => {
-      const rejectedQuestion = proposedLead?.primaryLead;
-    
-      setProposedLead(null);
-      setLeadApproved(false);
-      setAiAnalysis(null);
-    
-      void analyzeLead(selectedLead, rejectedQuestion);
-    }}
-    style={{
-      padding: "10px 14px",
-      background: "#ffffff",
-      color: "#3730a3",
-      border: "1px solid #a5b4fc",
-      borderRadius: "8px",
-      cursor: "pointer",
-    }}
-  >
-    {isAnalyzing ? <><ActionSpinner label="Generating a replacement lead" /> Generating…</> : "Reject / Clear Lead"}
-  </button>
 </div>
   </div>
 )}
-{(proposedLead || deepResearch) && (
+{(angleSet || proposedLead || deepResearch) && (
   <section className="deep-research-panel" aria-labelledby="deep-research-heading">
     <div className="deep-research-heading">
       <div>
@@ -2592,7 +2571,7 @@ if (!["low", "medium", "high"].includes(typeof startingEvidenceLevel === "string
     </>
   )}
 
-  {!isAnalyzing && !analysisError && !aiAnalysis && !proposedLead && !investigationPlan && (
+  {!isAnalyzing && !analysisError && !aiAnalysis && !angleSet && !proposedLead && !investigationPlan && (
     <p style={{ color: "#85869c", lineHeight: 1.8 }}>
       No investigative lead has been generated for this story yet.
     </p>

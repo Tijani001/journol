@@ -1,0 +1,225 @@
+.panel {
+  margin-bottom: 24px;
+  color: #24233a;
+  font-family: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  color: #6562c8;
+  font: 800 11px/1.4 "Manrope", ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+}
+
+.heading {
+  margin: 0 0 4px;
+  font: 800 20px/1.3 "Manrope", ui-sans-serif, system-ui, sans-serif;
+}
+
+.intro {
+  margin: 0 0 14px;
+  color: #5c5b72;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.gaps {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 28px;
+  padding: 0;
+  list-style: none;
+  counter-reset: gap;
+}
+
+.gap {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid #eceaf6;
+  border-radius: 12px;
+  background: #fff;
+}
+
+.gapNumber {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 50%;
+  background: #f2f1ff;
+  color: #4b48b0;
+  font: 800 13px "Manrope", ui-sans-serif, system-ui, sans-serif;
+}
+
+.gapKind {
+  display: block;
+  margin-bottom: 2px;
+  color: #6b6a82;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.gapText {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.quote {
+  margin: 8px 0 0;
+  padding-left: 10px;
+  border-left: 3px solid #dcdaf3;
+  color: #55546b;
+  font-size: 13px;
+  font-style: italic;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.angles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 14px;
+}
+
+.angle {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid #e3e1f3;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.angleChosen {
+  border-color: #6562c8;
+  box-shadow: 0 0 0 2px #6562c8 inset;
+}
+
+.angleType {
+  align-self: flex-start;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #f2f1ff;
+  color: #3f3d9e;
+  font: 800 12px "Manrope", ui-sans-serif, system-ui, sans-serif;
+}
+
+.angleHeadline {
+  margin: 0;
+  font: 800 17px/1.35 "Manrope", ui-sans-serif, system-ui, sans-serif;
+}
+
+.question {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.55;
+}
+
+.why {
+  margin: 0;
+  color: #4a4960;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.meta {
+  margin: 0;
+  color: #6b6a82;
+  font-size: 13px;
+}
+
+.details {
+  display: grid;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #efeef5;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.details h5 {
+  margin: 0 0 2px;
+  font: 800 13px "Manrope", ui-sans-serif, system-ui, sans-serif;
+}
+
+.details p,
+.details ul {
+  margin: 0;
+}
+
+.details ul {
+  padding-left: 18px;
+}
+
+.choose {
+  align-self: flex-start;
+  min-height: 44px;
+  margin-top: auto;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 10px;
+  background: #6562c8;
+  color: #fff;
+  font: 700 14px "Manrope", ui-sans-serif, system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.choose:hover:not(:disabled) {
+  background: #4b48b0;
+}
+
+.chosenLabel {
+  align-self: flex-start;
+  margin-top: auto;
+  color: #2c7a4b;
+  font: 800 14px "Manrope", ui-sans-serif, system-ui, sans-serif;
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-top: 16px;
+}
+
+.secondary {
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid #c7c6ef;
+  border-radius: 10px;
+  background: #fff;
+  color: #3f3d9e;
+  font: 700 14px "Manrope", ui-sans-serif, system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.notice {
+  padding: 18px;
+  border: 1px solid #f0dcb4;
+  border-radius: 14px;
+  background: #fffaf0;
+}
+
+.notice h4 {
+  margin: 0 0 6px;
+  font: 800 16px "Manrope", ui-sans-serif, system-ui, sans-serif;
+}
+
+.notice p {
+  margin: 0 0 8px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.choose:focus-visible,
+.secondary:focus-visible {
+  outline: 3px solid #bdbbff;
+  outline-offset: 2px;
+}

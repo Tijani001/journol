@@ -44,6 +44,10 @@ export interface JournolRepository {
   attachSourceToInvestigation(input: { investigationId: Id; sourceArticleId: Id; addedByUserId: Id }): Promise<void>;
   investigationHasSource(investigationId: Id, sourceArticleId: Id): Promise<boolean>;
   createLeadVersion(input: CreateLeadInput): Promise<InvestigativeLead>;
+  /** Stores several proposed leads (one angle set) as consecutive versions, all or none. */
+  createLeadVersions(inputs: CreateLeadInput[]): Promise<InvestigativeLead[]>;
+  /** Every lead version for the investigation, oldest first. */
+  listLeadsForInvestigation(investigationId: Id): Promise<InvestigativeLead[]>;
   getLatestLeadForSource(investigationId: Id, sourceArticleId: Id): Promise<InvestigativeLead | null>;
   getLatestLeadForInvestigation(investigationId: Id): Promise<InvestigativeLead | null>;
   getLead(id: Id): Promise<InvestigativeLead | null>;
@@ -176,6 +180,16 @@ export class InMemoryJournolRepository implements JournolRepository {
     const lead: InvestigativeLead = { id: randomUUID(), ...input, version, approvedByUserId: null, approvedAt: null, createdAt: now, updatedAt: now };
     this.leads.set(lead.id, lead);
     return lead;
+  }
+
+  async createLeadVersions(inputs: CreateLeadInput[]) {
+    const leads: InvestigativeLead[] = [];
+    for (const input of inputs) leads.push(await this.createLeadVersion(input));
+    return leads;
+  }
+
+  async listLeadsForInvestigation(investigationId: Id) {
+    return [...this.leads.values()].filter((lead) => lead.investigationId === investigationId).sort((a, b) => a.version - b.version);
   }
 
   async getLatestLeadForSource(investigationId: Id, sourceArticleId: Id) {

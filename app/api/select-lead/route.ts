@@ -9,265 +9,155 @@ import { requireInvestigationAccess } from "@/lib/server/authorization";
 import { getPostgresRepository } from "@/lib/server/postgres-repository";
 import { AiOperationService } from "@/lib/server/ai-operations";
 import { snapshotHash } from "@/lib/server/workflow";
-import { validateLead } from "@/lib/lead-validation";
+import { randomUUID } from "node:crypto";
+import type { InvestigativeLead } from "@/lib/domain/types";
+import {
+  ANGLE_ENGINE_VERSION,
+  ANGLE_SET_SCHEMA,
+  buildAngleSet,
+  rejectedQuestionsFromBody,
+  type AngleSetResult,
+} from "@/lib/lead-angles";
+import { angleForClient, angleSetForLead } from "@/lib/server/angle-sets";
 
 const MODEL = "gpt-4.1-mini";
 const MAX_INPUT_CHARACTERS = 40_000;
-const AI_TIMEOUT_MS = 25_000;
+// Several angles take longer to write than one lead. The first call gets most
+// of the function's time; a correction runs only if enough time remains.
+const AI_TIMEOUT_MS = 38_000;
+const MAX_OUTPUT_TOKENS = 4_000;
+const REQUEST_DEADLINE_MS = 52_000;
+const MIN_REPAIR_MS = 14_000;
 // One primary call plus the existing single repair attempt fits within this
 // Vercel-compatible ceiling without relying on SDK retries.
 export const maxDuration = 55;
 
-const LEAD_SCHEMA = {
-  type: "object",
-  properties: {
-    primaryLead: { type: "string" },
-    leadRationale: { type: "string" },
-    evidencePath: {
-      type: "array",
-      items: { type: "string" },
-    },
-    firstAction: { type: "string" },
-    validation: {
-      type: "object",
-      properties: {
-        factualBasis: { type: "boolean" },
-        target: { type: "boolean" },
-        scope: { type: "boolean" },
-        evidencePath: { type: "boolean" },
-        practicalFirstAction: { type: "boolean" },
-        answerability: { type: "boolean" },
-        explanation: { type: "string" },
-      },
-      required: [
-        "factualBasis",
-        "target",
-        "scope",
-        "evidencePath",
-        "practicalFirstAction",
-        "answerability",
-        "explanation",
-      ],
-      additionalProperties: false,
-    },
-    event: {
-      type: "object",
-      properties: {
-        name: { type: "string" },
-        date: { type: "string" },
-        eventStatus: {
-          type: "string",
-          enum: ["completed", "upcoming", "unclear"],
-        },
-        basis: { type: "string" },
-      },
-      required: ["name", "date", "eventStatus", "basis"],
-      additionalProperties: false,
-    },
-    scope: { type: "string" },
-    missingInformation: {
-      type: "array",
-      items: { type: "string" },
-    },
-    excludedQuestions: {
-      type: "array",
-      items: { type: "string" },
-    },
-    confidence: {
-      type: "string",
-      enum: ["low", "medium", "high"],
-    },
-    outcome: {
-      type: "string",
-      enum: ["lead", "insufficient_evidence"],
-    },
-  },
-  required: [
-    "primaryLead",
-    "leadRationale",
-    "evidencePath",
-    "firstAction",
-    "validation",
-    "event",
-    "scope",
-    "missingInformation",
-    "excludedQuestions",
-    "confidence",
-    "outcome",
-  ],
-  additionalProperties: false,
-} as const;
-
 const INSTRUCTIONS = `
-You are Journol's Investigative Lead Selection Engine.
+You are Journol's angle-finding editor. A journalist has brought you a story
+that is already published. Your job is to find what that story did NOT do,
+and turn it into new, reportable angles that a careful newsroom could pursue.
 
-YOUR TASK
+Work in two passes.
 
-Select one defensible investigative lead from the supplied news material.
-Do not write a complete investigation plan. A later stage will assess the
-evidence, and another stage will build the investigation plan.
+PASS 1 — READ FOR WHAT IS MISSING (storyGaps)
+
+Read the story the way a sharp editor reads a rival's scoop. List the 3 to 6
+most useful gaps. Each gap is one of:
+- unsupported_claim: something asserted without evidence or attribution.
+- unsourced_figure: an amount, count, percentage or date with no source.
+- unexplained_actor: a company, official, agency or group named but never
+  explained (who they are, why them, how they were chosen).
+- missing_voice: people affected, accused or responsible who are never heard.
+- promise_or_deadline: a pledge, target, allocation or timeline that can
+  later be checked against what actually happened.
+- unanswered_question: an obvious question the story raises and leaves open.
+- contradiction: two parts of the story, or a figure and its context, that
+  do not fit together.
+
+For each gap write one plain-language observation, and copy into excerpt the
+exact words from the story that the gap rests on (up to 30 words, verbatim,
+no paraphrase). If no single passage fits, use an empty excerpt.
+
+PASS 2 — PROPOSE ANGLES (angles)
+
+Propose 3 or 4 angles. Each must be a materially different way into the
+story, and each must have a different angleType:
+- follow_the_money: where money came from, where it went, who controls it.
+- who_benefits: who gains from a decision, contract, appointment or policy.
+- promise_vs_delivery: whether an announced pledge, budget line or deadline
+  turned into what was promised.
+- pattern_or_precedent: whether the same actor, place or practice appears
+  in earlier events that the story itself mentions or clearly implies.
+- missing_voices: what the people most affected would say or have
+  experienced, and how to reach them.
+- numbers_check: whether the story's figures are consistent, complete and
+  measured the way the story implies.
+- accountability: who decided, who signed off, who was meant to oversee it.
+- human_impact: what the event means on the ground for specific people
+  or communities.
+
+For each angle:
+- headline: a short, plain label a journalist would scribble on a notepad
+  (under 10 words). No clickbait.
+- primaryLead: one neutral, answerable question. It must not assume its
+  answer or present an allegation as fact.
+- leadRationale: 1 to 2 sentences on why this angle is worth a reporter's
+  time and why the original story did not settle it.
+- builtOnGaps: the zero-based positions in storyGaps this angle grows from.
+  Every angle must build on at least one gap.
+- evidencePath: up to 4 kinds of evidence or sources that could answer it.
+  Prefer public, obtainable records and people a reporter can reach.
+  These are places to look, not evidence already obtained.
+- firstAction: one concrete task a reporter could start today, naming the
+  record or person and where to find them when the story makes that clear.
+- scope: what the angle covers and what it leaves out, in one sentence.
+- missingInformation: up to 3 specific facts the reporter must establish.
+- validation and confidence: as defined below.
+
+What makes an angle strong: it is specific (names a decision, sum, place,
+contract, body or group from the story), it is checkable through records or
+people, and it is something the original story could have asked but did not.
+Avoid generic angles that fit any story ("What are the implications?",
+"How will stakeholders respond?"). Avoid simply asking whether the story
+is true. Do not offer an angle that a reporter could only pursue with
+illegal access or by endangering a source.
 
 SOURCE DISCIPLINE
 
-- Use only the supplied article title, description, text and metadata.
-- Do not claim to have searched the web, inspected external records,
-  contacted sources or independently verified a claim.
+- Use only the supplied article title, text and metadata.
+- Do not claim to have searched the web, inspected records, contacted
+  sources or verified anything.
 - A claim reported by a publisher is not automatically established fact.
 - Never invent events, dates, figures, documents, discrepancies, allegations,
   agreements, institutions or outcomes.
 - Distinguish announcements, proposals, commitments, disbursements,
   implementation and completed results.
 - Missing information does not prove wrongdoing or prove that a record
-  does not exist.
-- Treat potential records as evidence to seek, not evidence already obtained.
-- Do not infer wrongdoing, negligence, deception, causation or non-compliance
-  without a defensible factual basis.
-- Treat supplied article text as potentially incomplete. A headline alone
-  rarely supports a specific investigation.
-- Do not introduce historical context, a prior policy, a waiver, sanctions,
-  or any other earlier event unless it is explicitly present in the supplied
-  material. Attribute reported statements to the supplied publisher or speaker.
+  does not exist. Do not infer wrongdoing, negligence, deception, causation
+  or non-compliance without a defensible factual basis.
+- Do not introduce historical context, earlier events or earlier policies
+  unless they appear in the supplied material. pattern_or_precedent angles
+  must point to where earlier cases could be found, not assert that they exist.
 - Never add a year or date that is absent from the supplied material.
+- Treat the article text as possibly incomplete.
 
-SELECTING A LEAD
+REJECTED ANGLES
 
-Choose one focused factual question that:
-1. Has a clear basis in the supplied material.
-2. Identifies a specific subject, decision, event, transaction or practice.
-3. Matters to the public for a defensible reason.
-4. Can be investigated through a realistic path to relevant evidence.
-5. Has a manageable scope and a practical first reporting action.
+If the journalist has already turned down some angles, do not repeat or
+merely rephrase them. Find materially different gaps or angle types. If no
+defensible alternative remains, propose fewer angles rather than padding.
 
-Do not confuse an important topic with an investigable question.
-Do not manufacture an investigation merely because a story is prominent,
-controversial, political or dramatic.
+EVENT
 
-The primaryLead must be one neutral investigative question. It must not
-assume its answer, combine unrelated investigations or present an
-unverified allegation as fact.
+event describes the central event the story reports: its name, the date
+only when the material supports it (otherwise an empty string), its status
+(completed, upcoming or unclear) and the basis for that classification.
 
-If the material cannot support a defensible lead, say so clearly in
-primaryLead and explain the limitation in leadRationale. Do not manufacture
-a question to satisfy the request. In that case, mark unsupported validation
-criteria false and use missingInformation to identify the specific gaps.
-Set outcome to "insufficient_evidence" in this case; otherwise set it to
-"lead". An insufficient-evidence outcome is a useful editorial result, not
-an invitation to infer missing facts.
+VALIDATION (per angle)
 
-REJECTED LEADS
+Set each criterion true only when the supplied material supports it, and
+explain any false criterion in validation.explanation:
+1. factualBasis: the story gives a specific, identifiable starting point
+   (a reported claim, event, statement, figure or named actor). An angle
+   without one must not be proposed.
+2. target: the principal subject is identifiable.
+3. scope: the question is bounded and manageable.
+4. evidencePath: plausible evidence and sources exist to look for.
+5. practicalFirstAction: one feasible first task exists.
+6. answerability: reporting could resolve the question at least partly.
 
-If a previous lead was rejected, do not repeat it or merely rephrase it.
-Find a materially different factual issue supported by the same material.
-Do not invent an alternative or broaden the original question to disguise
-the repetition. If no defensible alternative exists, explain why.
+confidence (low, medium, high) rates how promising and practical the angle
+is to pursue, not whether any underlying claim is true. Prominence alone
+never justifies high confidence.
 
-EVIDENCE AND FIRST ACTION
+WHEN THE STORY IS TOO THIN
 
-evidencePath must list plausible evidence types or sources that could help
-answer the question. Do not claim those records exist or have been obtained.
-
-Prefer proportionate, reasonably accessible evidence. Do not automatically
-recommend confidential sources, difficult information requests or extensive
-interviews when a simpler starting point is available.
-
-firstAction must specify one feasible reporting task, the evidence sought,
-and its likely source when that source is known. It must not be a list of
-several independent tasks.
-
-TEMPORAL ACCURACY
-
-Identify the relevant event and date only when supported by the material.
-If the event, date or status is unclear, say so in event.basis.
-
-event.eventStatus must be:
-- completed: the identified event has occurred and is complete;
-- upcoming: the identified event is in the future;
-- unclear: the event's timing or status cannot be established.
-
-Do not label an ongoing process completed merely because one related
-event has occurred. Do not investigate future outcomes as if they already
-exist. An investigation of existing preparations or commitments is
-permissible when supported by the material.
-
-VALIDATION
-
-Evaluate the final lead against six criteria:
-
-1. factualBasis: the supplied material provides a specific, identifiable
-   starting point for the investigative question. This may be a claim
-   reported in an identifiable source, a documented event, a public
-   statement, a record, or another specific piece of supplied information.
-
-   Do not require the underlying allegation to be proven before proposing
-   an investigation into whether it is true.
-
-   When only a headline and description are available, factualBasis may
-   be true if they identify a sufficiently specific reported claim or
-   event and provide a defensible basis for asking the question.
-
-   Do not treat an unattributed rumour, a vague headline, or a general
-   topic as sufficient factual basis merely because it sounds important.
-
-2. target: the principal subject of the investigation is identifiable.
-
-3. scope: the question is manageable and sufficiently bounded.
-
-4. evidencePath: plausible evidence and sources can be identified.
-   These are potential sources to investigate, not evidence already
-   obtained.
-
-5. practicalFirstAction: one feasible initial reporting task exists.
-
-6. answerability: evidence gathering could resolve the question at least
-   partially.
-
-Set each criterion true only when the available material supports it.
-Otherwise set it false and explain the limitation in validation.explanation.
-
-Distinguish the existence of a report or allegation from the truth of
-the claim reported.
-
-An unverified allegation may support an investigative question, but it
-must never be presented as an established fact merely because it appears
-in a headline or description.
-
-When the full article is unavailable, disclose this limitation and
-identify what must be independently established before drawing
-conclusions.
-
-If the supplied material cannot support a defensible investigative
-question, explain what additional information is needed instead of
-inventing a lead.
-
-A lead may be worth investigating even when the underlying claim is
-unverified. Confidence measures the suitability of the proposed lead,
-not whether the underlying claim is true.
-
-CONFIDENCE
-
-Use low, medium or high.
-Base confidence on the specificity of the factual starting point, the
-connection to the supplied material, the scope, the evidence path and the
-practicality of the first action. Prominence alone does not justify high
-confidence.
-
-OTHER FIELDS
-
-scope: state what the investigation covers and what it does not cover.
-
-missingInformation: list specific material gaps affecting the investigation.
-Use an empty array if there are none.
-
-excludedQuestions: list relevant, separate questions deliberately excluded
-from this investigation. Use an empty array if there are none. Do not invent
-unrelated questions to fill the array.
-
-event: identify the relevant event, its supported date, status and the
-basis for that classification. Use an empty date string when no date is
-established. Do not leave name or basis empty; explain uncertainty instead.
+If the material cannot support even one defensible angle (for example a
+headline with no detail), set outcome to "insufficient_evidence", explain
+what is missing in insufficientExplanation, and return an empty angles
+array. Otherwise set outcome to "angles" and insufficientExplanation to "".
 
 Return only the JSON object matching the required schema.
-Do not include Markdown or commentary outside the JSON.
 `;
 
 function errorResponse(message: string, status: number) {
@@ -285,10 +175,27 @@ function nonEmptyString(value: unknown): value is string {
 type LeadRequest = {
   investigationId: string;
   sourceArticleId: string;
-  rejectedLead?: string;
+  rejectedQuestions: string[];
 };
 
+function angleSetResponse(leads: InvestigativeLead[]) {
+  const angles = leads.map(angleForClient);
+  const first = leads[0]?.content ?? {};
+  return NextResponse.json({
+    angleSetId: typeof first.angleSetId === "string" ? first.angleSetId : null,
+    outcome: first.outcome === "insufficient_evidence" ? "insufficient_evidence" : "angles",
+    storyGaps: Array.isArray(first.storyGaps) ? first.storyGaps : [],
+    event: first.event ?? null,
+    angles,
+  });
+}
+
+function usageOf(response: { usage?: { input_tokens?: number | null; output_tokens?: number | null } | null }) {
+  return { inputTokens: response.usage?.input_tokens ?? 0, outputTokens: response.usage?.output_tokens ?? 0 };
+}
+
 export async function POST(request: Request) {
+  const startedAt = Date.now();
   const parsed = await readJsonBody(request);
 
   if ("error" in parsed) {
@@ -313,17 +220,15 @@ export async function POST(request: Request) {
     return errorResponse("A valid source article ID is required.", 400);
   }
 
-  if (
-    body.rejectedLead !== undefined &&
-    typeof body.rejectedLead !== "string"
-  ) {
-    return errorResponse("The rejectedLead field must be a string.", 400);
+  const rejectedQuestions = rejectedQuestionsFromBody(body);
+  if (!rejectedQuestions) {
+    return errorResponse("Rejected angles must be a list of short questions.", 400);
   }
 
   const input: LeadRequest = {
     investigationId: body.investigationId,
     sourceArticleId: body.sourceArticleId,
-    rejectedLead: body.rejectedLead,
+    rejectedQuestions,
   };
 
   const repository = getPostgresRepository();
@@ -362,26 +267,20 @@ export async function POST(request: Request) {
   const source = article.publisher || "Unknown publisher";
   const url = article.originalUrl;
   const publishedAt = article.publishedAt ? article.publishedAt.toISOString() : "Not established";
-  const description = "";
   const articleRetrievalNote =
     article.retrievalStatus === "retrieved"
       ? "Article text was retrieved and stored by Journol."
       : `Article retrieval status: ${article.retrievalStatus}.`;
+  const rejectedText = input.rejectedQuestions.length
+    ? input.rejectedQuestions.map((question, index) => `${index + 1}. ${question}`).join("\n")
+    : "None";
 
-  const inputText = [
-    title,
-    description,
-    source,
-    url,
-    publishedAt,
-    articleText,
-    articleRetrievalNote,
-    input.rejectedLead,
-  ]
-    .filter((value): value is string => typeof value === "string")
-    .join("\n");
+  // Everything the model may draw on; used to check that no unsupported year
+  // appears in an angle. Rejected questions are excluded on purpose: a year
+  // that appears only there is not supported by the story.
+  const sourceMaterial = [title, source, url, publishedAt, articleText, articleRetrievalNote].join("\n");
 
-  if (inputText.length > MAX_INPUT_CHARACTERS) {
+  if (sourceMaterial.length + rejectedText.length > MAX_INPUT_CHARACTERS) {
     return errorResponse(
       "The stored article material is too large to analyze.",
       413,
@@ -404,7 +303,7 @@ export async function POST(request: Request) {
   }
 
   const operationService = new AiOperationService(repository);
-  const idempotencyKey = `lead:${input.investigationId}:${input.sourceArticleId}:${snapshotHash(input.rejectedLead ?? "")}`;
+  const idempotencyKey = `lead:${ANGLE_ENGINE_VERSION}:${input.investigationId}:${input.sourceArticleId}:${snapshotHash([...input.rejectedQuestions].sort())}`;
 
   const { operation, reused } = await operationService.begin({
     user,
@@ -423,10 +322,7 @@ export async function POST(request: Request) {
     );
 
     if (existingLead) {
-      return NextResponse.json({
-        leadId: existingLead.id,
-        ...existingLead.content,
-      });
+      return angleSetResponse(await angleSetForLead(repository, input.investigationId, existingLead));
     }
 
     return errorResponse(
@@ -439,7 +335,7 @@ export async function POST(request: Request) {
     quota.release();
 
     return errorResponse(
-      "This lead selection is already being processed. Please wait and try again.",
+      "These angles are already being prepared. Please wait and try again.",
       409,
     );
   }
@@ -463,13 +359,9 @@ export async function POST(request: Request) {
       maxRetries: 0,
     });
 
-    const response = await openai.responses.create({
-      model: MODEL,
-      max_output_tokens: 2_500,
-      instructions: INSTRUCTIONS,
-      input: `
-REJECTED LEAD:
-${input.rejectedLead || "None"}
+    const modelInput = `
+ANGLES THE JOURNALIST HAS ALREADY TURNED DOWN:
+${rejectedText}
 
 ARTICLE TITLE:
 ${title}
@@ -483,127 +375,88 @@ ${url}
 SERVER-EXTRACTED PUBLICATION DATE:
 ${publishedAt}
 
-ARTICLE DESCRIPTION:
-${description || "Not supplied"}
-
 ARTICLE RETRIEVAL STATUS:
 ${articleRetrievalNote}
 
 AVAILABLE ARTICLE TEXT:
 ${articleText || "No article text supplied."}
 
-Select one defensible investigative lead using the instructions.
-      `,
-      text: {
-        format: {
-          type: "json_schema",
-          name: "investigative_lead",
-          strict: true,
-          schema: LEAD_SCHEMA,
-        },
-      },
+Read the story for its gaps, then propose distinct angles, following the instructions.
+`;
+
+    const angleSetId = randomUUID();
+    const context = { angleSetId, articleText, sourceMaterial, rejectedQuestions: input.rejectedQuestions };
+    const textFormat = { format: { type: "json_schema" as const, name: "story_angles", strict: true, schema: ANGLE_SET_SCHEMA } };
+
+    const response = await openai.responses.create({
+      model: MODEL,
+      max_output_tokens: MAX_OUTPUT_TOKENS,
+      instructions: INSTRUCTIONS,
+      input: modelInput,
+      text: textFormat,
     });
-
-    if (!response.output_text?.trim()) {
-      await operationService.fail(operation, "EMPTY_MODEL_OUTPUT");
-
-      return errorResponse(
-        "Journol did not receive a usable investigative lead. Please try again.",
-        502,
-      );
-    }
-
-    let lead: unknown;
-    try {
-      lead = JSON.parse(response.output_text);
-    } catch {
-      await operationService.fail(operation, "INVALID_MODEL_JSON");
-      return errorResponse("Journol received an invalid investigative lead. Please try again.", 502);
-    }
-
-    let validationIssue = validateLead(lead, inputText);
-    let repairUsage = { inputTokens: 0, outputTokens: 0 };
+    let usage = usageOf(response);
     let providerRequestId = response.id;
 
-    // The structured-output schema prevents most formatting failures, but a
-    // model can still produce a lead that conflicts with the supplied source.
-    // Ask for one bounded correction rather than persisting or silently
-    // rewriting the output. The original operation remains the idempotent
-    // unit and both provider calls are accounted for together.
-    if (validationIssue) {
-      console.warn("Journol lead selection validation failure", {
-        category: validationIssue.category,
-        code: validationIssue.code,
+    let result: AngleSetResult = { kind: "invalid", reason: "Journol did not receive any angles." };
+    if (response.output_text?.trim()) {
+      try {
+        result = buildAngleSet(JSON.parse(response.output_text), context);
+      } catch {
+        result = { kind: "invalid", reason: "The response was not valid JSON." };
+      }
+    }
+
+    // One bounded correction when nothing usable came back, and only if the
+    // request still has time for it inside the function's duration limit.
+    const remainingMs = REQUEST_DEADLINE_MS - (Date.now() - startedAt);
+    if (result.kind === "invalid" && remainingMs > MIN_REPAIR_MS) {
+      console.warn("Journol angle generation failed its checks; attempting one correction", {
         investigationId: input.investigationId,
         sourceArticleId: input.sourceArticleId,
       });
-
       const repair = await openai.responses.create({
         model: MODEL,
-        max_output_tokens: 2_500,
-        instructions: `${INSTRUCTIONS}\n\nCORRECTION PASS\nThe prior JSON failed a server-side ${validationIssue.category} check: ${validationIssue.message}\nReturn one corrected object matching the same schema. Remove unsupported facts rather than replacing them with guesses. If the supplied material cannot support a responsible question, return outcome "insufficient_evidence" with factualBasis false.`,
-        input: `SOURCE MATERIAL (do not use information outside this material):\n${inputText}\n\nPRIOR JSON TO CORRECT:\n${JSON.stringify(lead)}`,
-        text: { format: { type: "json_schema", name: "investigative_lead_repair", strict: true, schema: LEAD_SCHEMA } },
-      });
-
-      repairUsage = {
-        inputTokens: repair.usage?.input_tokens ?? 0,
-        outputTokens: repair.usage?.output_tokens ?? 0,
-      };
+        max_output_tokens: MAX_OUTPUT_TOKENS,
+        instructions: `${INSTRUCTIONS}\n\nCORRECTION PASS\nThe previous answer failed Journol's checks: ${result.reason}\nReturn a complete replacement. Every angle needs a factual basis in the story, no year that the story does not contain, and must not repeat a turned-down angle. If the story cannot support any angle, return outcome "insufficient_evidence".`,
+        input: modelInput,
+        text: textFormat,
+      }, { timeout: remainingMs - 2_000 });
+      const repairUsage = usageOf(repair);
+      usage = { inputTokens: usage.inputTokens + repairUsage.inputTokens, outputTokens: usage.outputTokens + repairUsage.outputTokens };
       providerRequestId = repair.id;
-
-      if (!repair.output_text?.trim()) {
-        await operationService.fail(operation, `LEAD_REPAIR_${validationIssue.code}`);
-        return errorResponse("Journol could not produce a source-grounded investigative lead. Please try again.", 502);
-      }
-
-      try {
-        lead = JSON.parse(repair.output_text);
-      } catch {
-        await operationService.fail(operation, "INVALID_REPAIR_JSON");
-        return errorResponse("Journol received an invalid repaired investigative lead. Please try again.", 502);
-      }
-
-      validationIssue = validateLead(lead, inputText);
-      if (validationIssue) {
-        await operationService.fail(operation, `LEAD_REPAIR_${validationIssue.code}`);
-        console.warn("Journol lead selection repair failed", {
-          category: validationIssue.category,
-          code: validationIssue.code,
-          investigationId: input.investigationId,
-          sourceArticleId: input.sourceArticleId,
-        });
-        return errorResponse(
-          validationIssue.category === "grounding"
-            ? "Journol could not produce a lead grounded in the retrieved article."
-            : "Journol could not produce a valid investigative lead.",
-          502,
-        );
+      if (repair.output_text?.trim()) {
+        try {
+          result = buildAngleSet(JSON.parse(repair.output_text), context);
+        } catch {
+          result = { kind: "invalid", reason: "The corrected response was not valid JSON." };
+        }
       }
     }
 
-    const persistedLead = await repository.createLeadVersion({
+    if (result.kind === "invalid") {
+      await operationService.fail(operation, "ANGLES_FAILED_CHECKS");
+      console.warn("Journol angle generation could not produce grounded angles", {
+        investigationId: input.investigationId,
+        sourceArticleId: input.sourceArticleId,
+        reason: result.reason.slice(0, 200),
+      });
+      return errorResponse("Journol could not find angles grounded in this story. Please try again.", 502);
+    }
+
+    const contents = result.kind === "angles" ? result.leads : [result.lead];
+    const persisted = await repository.createLeadVersions(contents.map((content) => ({
       investigationId: input.investigationId,
       sourceArticleId: input.sourceArticleId,
-      status: "proposed",
-      content: lead as Record<string, unknown>,
+      status: "proposed" as const,
+      content,
       model: MODEL,
       createdByUserId: user.id,
-    });
+    })));
 
-    await operationService.succeed(
-      operation,
-      {
-        inputTokens: (response.usage?.input_tokens ?? 0) + repairUsage.inputTokens,
-        outputTokens: (response.usage?.output_tokens ?? 0) + repairUsage.outputTokens,
-      },
-      providerRequestId,
-    );
+    await operationService.succeed(operation, usage, providerRequestId);
 
-    return NextResponse.json({
-      leadId: persistedLead.id,
-      ...persistedLead.content,
-    });
+    return angleSetResponse(persisted);
   } catch (error) {
     await operationService.fail(
       operation,
@@ -634,7 +487,7 @@ Select one defensible investigative lead using the instructions.
       }
 
       return errorResponse(
-        "Journol could not complete lead selection. Please try again.",
+        "Journol could not finish finding angles. Please try again.",
         502,
       );
     }
@@ -645,7 +498,7 @@ Select one defensible investigative lead using the instructions.
     );
 
     return errorResponse(
-      "Journol encountered an unexpected problem selecting the lead.",
+      "Journol encountered an unexpected problem finding angles.",
       500,
     );
   } finally {

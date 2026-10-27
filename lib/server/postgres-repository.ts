@@ -116,6 +116,35 @@ export class PostgresJournolRepository implements JournolRepository {
       client.release();
     }
   }
+  async createLeadVersions(inputs: CreateLeadInput[]) {
+    if (!inputs.length) return [];
+    const investigationId = inputs[0].investigationId;
+    if (inputs.some((input) => input.investigationId !== investigationId)) throw new Error("LEAD_SET_SPANS_INVESTIGATIONS");
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [investigationId]);
+      const result = await client.query("SELECT COALESCE(MAX(version), 0) AS max_version FROM investigative_leads WHERE investigation_id = $1", [investigationId]);
+      let version = Number(result.rows[0].max_version);
+      const leads: InvestigativeLead[] = [];
+      for (const input of inputs) {
+        version += 1;
+        const inserted = await client.query(
+          "INSERT INTO investigative_leads (id, investigation_id, source_article_id, version, status, content, model, created_by_user_id) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8) RETURNING *",
+          [randomUUID(), input.investigationId, input.sourceArticleId, version, input.status, JSON.stringify(input.content), input.model, input.createdByUserId],
+        );
+        leads.push(leadFromRow(inserted.rows[0]));
+      }
+      await client.query("COMMIT");
+      return leads;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  async listLeadsForInvestigation(investigationId: Id) { const result = await this.pool.query("SELECT * FROM investigative_leads WHERE investigation_id = $1 ORDER BY version ASC", [investigationId]); return result.rows.map(leadFromRow); }
   async getLatestLeadForSource(investigationId: Id, sourceArticleId: Id) {
     const result = await this.pool.query(
       "SELECT * FROM investigative_leads WHERE investigation_id = $1 AND source_article_id = $2 ORDER BY version DESC LIMIT 1",

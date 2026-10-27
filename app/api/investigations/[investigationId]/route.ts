@@ -4,6 +4,7 @@ import { AuthorizationError } from "@/lib/server/authorization";
 import { DatabaseConfigurationError } from "@/lib/server/database";
 import { getInvestigationForUser } from "@/lib/server/investigations";
 import { getPostgresRepository } from "@/lib/server/postgres-repository";
+import { angleForClient, angleSetForLead } from "@/lib/server/angle-sets";
 
 export async function GET(_: Request, context: { params: Promise<{ investigationId: string }> }) {
   try {
@@ -21,10 +22,13 @@ export async function GET(_: Request, context: { params: Promise<{ investigation
     const plan = investigation.currentPlanId ? await repository.getInvestigationPlan(investigation.currentPlanId) : null;
     const actions = plan ? await repository.listInvestigationActions(plan.id) : [];
     const source = lead ? await repository.getSourceArticle(lead.sourceArticleId) : null;
+    // The angles offered alongside the current lead, so a reopened
+    // investigation shows the same choice the journalist had.
+    const leadOptions = lead ? (await angleSetForLead(repository, investigation.id, lead)).map(angleForClient) : [];
     const deepResearch = await repository.getLatestDeepResearchReport(investigation.id);
     const saved = await repository.isInvestigationSavedForUser(user.id, investigation.id);
     return Response.json(
-      { success: true, investigation, saved, source, workflow: { lead, evidenceAssessment, plan, actions, deepResearch } },
+      { success: true, investigation, saved, source, workflow: { lead, leadOptions, evidenceAssessment, plan, actions, deepResearch } },
       { headers: { "Cache-Control": "private, no-store" } },
     );
   } catch (error) {
