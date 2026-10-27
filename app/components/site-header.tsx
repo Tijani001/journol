@@ -5,10 +5,7 @@ export function BrandMark() {
   return (
     <span className="brand">
       <span className="brand-mark" aria-hidden="true">j.</span>
-      <span className="brand-words">
-        <span className="brand-name">journol</span>
-        <span className="brand-tagline">NEWSROOM INTELLIGENCE</span>
-      </span>
+      <span className="brand-name">journol</span>
     </span>
   );
 }

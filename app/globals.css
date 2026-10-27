@@ -34,9 +34,7 @@ button { font-family: inherit; }
 .brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; color: var(--ink); }
 .brand:hover { color: var(--ink); }
 .brand-mark { display: inline-grid; place-items: center; width: 36px; height: 36px; padding: 0 4px 4px 0; border-radius: 12px; background: var(--purple); color: #fff; font-family: var(--heading); font-size: 22px; font-weight: 800; letter-spacing: -2px; box-shadow: 0 5px 12px rgba(91, 91, 199, 0.15); }
-.brand-words { display: flex; flex-direction: column; line-height: 1; }
-.brand-name { font-family: var(--heading); font-size: 20px; font-weight: 800; letter-spacing: -1px; }
-.brand-tagline { margin-top: 4px; font-size: 8px; font-weight: 700; letter-spacing: 1.15px; color: var(--muted); }
+.brand-name { font-family: var(--heading); font-size: 20px; font-weight: 800; letter-spacing: -1px; line-height: 1; }
 .site-nav { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .nav-link { display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 8px; color: var(--muted); font-weight: 600; font-size: 14px; text-decoration: none; }
 .nav-link:hover { color: var(--ink); }
@@ -206,6 +204,5 @@ h1, h2, h3 { margin: 0; }
   .site-header-inner { flex-wrap: nowrap; gap: 8px; }
   .site-nav { gap: 0; flex-wrap: nowrap; }
   .nav-link { padding: 0 8px; font-size: 13px; }
-  .brand-tagline { display: none; }
   .button-large { width: 100%; }
 }
