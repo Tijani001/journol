@@ -2,7 +2,7 @@ import "server-only";
 
 import type { PoolClient } from "pg";
 import { getDatabasePool } from "@/lib/server/database";
-import type { Angle, RelatedReport, SearchStatus, StoryGap, StoryInput } from "@/lib/engine/types";
+import type { Angle, RelatedReport, SearchStatus, StoryGap, StoryInput, StorySummary } from "@/lib/engine/types";
 
 /**
  * All database access. Every read and write of an analysis or angle is scoped
@@ -31,6 +31,7 @@ export type StoredAnalysis = {
   related: RelatedReport[];
   repeatedCount: number;
   searchStatus: SearchStatus;
+  summary: StorySummary | null;
   createdAt: string;
   angles: StoredAngle[];
 };
@@ -105,6 +106,7 @@ export async function saveAnalysis(input: {
   related: RelatedReport[];
   repeatedCount: number;
   searchStatus: SearchStatus;
+  summary: StorySummary | null;
   angles: Angle[];
   engineVersion: string;
   model: string;
@@ -121,11 +123,12 @@ export async function saveAnalysis(input: {
       [input.story.url, input.story.title, input.story.publisher, input.story.publishedAt, input.story.paragraphs.join("\n\n")],
     );
     const analysis = await client.query<{ id: string }>(
-      `INSERT INTO analyses (user_id, article_id, gaps, related, repeated_count, search_status, engine_version, model)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+      `INSERT INTO analyses (user_id, article_id, gaps, related, repeated_count, search_status, engine_version, model, summary)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
       [
         input.userId, article.rows[0].id, JSON.stringify(input.gaps), JSON.stringify(input.related),
         input.repeatedCount, input.searchStatus, input.engineVersion, input.model,
+        input.summary ? JSON.stringify(input.summary) : null,
       ],
     );
     await insertAngles(client, analysis.rows[0].id, input.userId, 1, input.angles);
@@ -167,7 +170,7 @@ export async function getAnalysis(userId: string, analysisId: string): Promise<S
   if (!isUuid(analysisId)) return null;
   const pool = getDatabasePool();
   const result = await pool.query(
-    `SELECT an.id, an.gaps, an.related, an.repeated_count, an.search_status, an.created_at,
+    `SELECT an.id, an.gaps, an.related, an.repeated_count, an.search_status, an.summary, an.created_at,
             ar.id AS article_id, ar.url, ar.title, ar.publisher, ar.published_at, ar.body
      FROM analyses an JOIN articles ar ON ar.id = an.article_id
      WHERE an.id = $1 AND an.user_id = $2`,
@@ -193,6 +196,7 @@ export async function getAnalysis(userId: string, analysisId: string): Promise<S
     gaps: row.gaps,
     related: row.related,
     repeatedCount: row.repeated_count,
+    summary: row.summary ?? null,
     searchStatus: row.search_status,
     createdAt: iso(row.created_at) ?? "",
     angles: angles.rows.map(toAngle),

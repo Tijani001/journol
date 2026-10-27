@@ -79,6 +79,8 @@ export function rawAngle(overrides: Partial<RawAngle> = {}): RawAngle {
 }
 
 export const RAW_ANALYSIS: RawAnalysis = {
+  story_summary: "The Federal Government says it will build 12 clinics in Zamfara mining communities for ₦4.5 billion, with Acme Construction Ltd as contractor and a December deadline.",
+  findings_summary: "The story never says who owns Acme or how many clinics have started. Daily Ledger [R2] reported in 2024 that Acme left four of six clinics in Sokoto unfinished.",
   gaps: [
     { kind: "unexplained_actor", question: "Who owns Acme Construction Ltd?", excerpt: "the contract had been awarded to Acme Construction Ltd", related_id: null },
     { kind: "promise_or_deadline", question: "Can 12 clinics really be ready by December?", excerpt: "the clinics would be ready by December", related_id: null },

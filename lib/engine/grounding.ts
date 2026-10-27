@@ -10,6 +10,7 @@ import {
   type SearchStatus,
   type StoryGap,
   type StoryInput,
+  type StorySummary,
 } from "@/lib/engine/types";
 
 /**
@@ -63,6 +64,30 @@ export function buildGaps(raw: RawAnalysis["gaps"], story: StoryInput, related: 
   });
 
   return { gaps, renumber };
+}
+
+/**
+ * Cleans the two summary paragraphs. Report ids like "[R2]" are removed, and a
+ * paragraph that brings in a year found in neither the story nor any related
+ * report is left out rather than shown.
+ */
+export function buildSummary(raw: Pick<RawAnalysis, "story_summary" | "findings_summary">, story: StoryInput, related: RelatedReport[], today: Date): StorySummary | null {
+  const allowed = new Set<string>([
+    String(today.getUTCFullYear()),
+    ...yearsIn(story.title),
+    ...story.paragraphs.flatMap(yearsIn),
+    ...(story.publishedAt ? [String(new Date(story.publishedAt).getUTCFullYear())] : []),
+    ...related.flatMap((report) => [
+      ...yearsIn(`${report.title} ${report.snippet}`),
+      ...(report.publishedAt ? [String(new Date(report.publishedAt).getUTCFullYear())] : []),
+    ]),
+  ]);
+  const tidy = (value: string) => {
+    const text = clean(value.replace(/\s*\[?\bR\d+\b\]?/g, ""), 900);
+    return yearsIn(text).every((year) => allowed.has(year)) ? text : "";
+  };
+  const summary = { story: tidy(raw.story_summary), findings: tidy(raw.findings_summary) };
+  return summary.story || summary.findings ? summary : null;
 }
 
 export function applyRelatedNotes(related: RelatedReport[], notes: RawAnalysis["related_notes"]): RelatedReport[] {

@@ -106,6 +106,9 @@ export type Angle = {
   steps: Array<{ title: string; detail: string }>;
 };
 
+/** A short "in brief" at the top of a story: what it says, and what Journol found. */
+export type StorySummary = { story: string; findings: string };
+
 export type StoryInput = {
   url: string;
   title: string;

@@ -12,9 +12,9 @@ import {
   type RawAnalysis,
   type RawAngle,
 } from "@/lib/engine/prompts";
-import { applyRelatedNotes, buildAngles, buildGaps } from "@/lib/engine/grounding";
+import { applyRelatedNotes, buildAngles, buildGaps, buildSummary } from "@/lib/engine/grounding";
 import type { RelatedCoverage } from "@/lib/engine/related";
-import type { Angle, RelatedReport, SearchStatus, StoryGap, StoryInput } from "@/lib/engine/types";
+import type { Angle, RelatedReport, SearchStatus, StoryGap, StoryInput, StorySummary } from "@/lib/engine/types";
 
 /**
  * The angle engine: plan a search from the story, search the web for related
@@ -44,6 +44,7 @@ export type EngineDeps = {
 };
 
 export type AnalysisResult = {
+  summary: StorySummary | null;
   gaps: StoryGap[];
   related: RelatedReport[];
   repeatedCount: number;
@@ -83,6 +84,8 @@ export function normalizeRawAngles(value: unknown): RawAngle[] {
 export function normalizeRawAnalysis(value: unknown): RawAnalysis {
   const body = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
   return {
+    story_summary: typeof body.story_summary === "string" ? body.story_summary : "",
+    findings_summary: typeof body.findings_summary === "string" ? body.findings_summary : "",
     gaps: asArray<Record<string, unknown>>(body.gaps).map((gap) => ({
       kind: String(gap?.kind ?? ""),
       question: String(gap?.question ?? ""),
@@ -145,7 +148,8 @@ export async function analyzeStory(story: StoryInput, deps: EngineDeps): Promise
     built = buildAngles(raw.angles, { story, gaps, related, searchStatus: coverage.status, renumber, today });
   }
 
-  return { gaps, related, repeatedCount: coverage.repeatedCount, searchStatus: coverage.status, angles: built.angles };
+  const summary = buildSummary(raw, story, coverage.reports, today);
+  return { summary, gaps, related, repeatedCount: coverage.repeatedCount, searchStatus: coverage.status, angles: built.angles };
 }
 
 export async function findMoreAngles(

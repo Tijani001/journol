@@ -1,17 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState } from "react";
 import { CoverageTag } from "@/app/components/coverage-tag";
 import { ANGLE_TYPE_LABELS, GAP_KIND_LABELS, MAX_ROUNDS, type RelatedReport, type StoryGap } from "@/lib/engine/types";
 import { longDate, plural, reportCredit } from "@/lib/format";
-import { findExcerpt } from "@/lib/text-match";
 import type { StoredAnalysis, StoredAngle } from "@/lib/server/store";
 
 export function StoryView({ analysis }: { analysis: StoredAnalysis }) {
   const [angles, setAngles] = useState<StoredAngle[]>(analysis.angles);
   const [round, setRound] = useState(1);
-  const [activeGap, setActiveGap] = useState<number | null>(null);
   const [showSources, setShowSources] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [moreError, setMoreError] = useState("");
@@ -20,12 +18,6 @@ export function StoryView({ analysis }: { analysis: StoredAnalysis }) {
   const reportsById = useMemo(() => new Map(related.map((report) => [report.id, report])), [related]);
   const rounds = Math.max(1, ...angles.map((angle) => angle.round));
   const shown = angles.filter((angle) => angle.round === round);
-
-  function selectGap(number: number) {
-    setActiveGap((current) => (current === number ? null : number));
-    const mark = document.getElementById(`gap-mark-${number}`);
-    if (mark && activeGap !== number) mark.scrollIntoView({ behavior: "smooth", block: "center" });
-  }
 
   async function showDifferentAngles() {
     setMoreError("");
@@ -69,6 +61,11 @@ export function StoryView({ analysis }: { analysis: StoredAnalysis }) {
           {article.publishedAt ? ` · ${longDate(article.publishedAt)}` : ""}
         </p>
         <h1 className="story-title">{article.title}</h1>
+        <div className="toolbar">
+          <a className="button" href={article.url} target="_blank" rel="noreferrer">
+            Read the full story on {article.publisher} ↗
+          </a>
+        </div>
         <SearchLine
           analysis={analysis}
           open={showSources}
@@ -78,29 +75,40 @@ export function StoryView({ analysis }: { analysis: StoredAnalysis }) {
 
       {showSources ? <SourcesPanel analysis={analysis} angles={angles} /> : null}
 
-      <div className="story-layout">
-        <article className="story-text" aria-label="The story">
-          {article.paragraphs.map((paragraph, index) => (
-            <p key={index}>{highlight(paragraph, gaps, activeGap, setActiveGap)}</p>
-          ))}
-          <a className="read-original" href={article.url} target="_blank" rel="noreferrer">
-            Read the original on {article.publisher} ↗
-          </a>
-        </article>
+      {analysis.summary ? (
+        <section className="brief" aria-labelledby="brief-heading">
+          <h2 id="brief-heading">In brief</h2>
+          <div className="brief-grid">
+            {analysis.summary.story ? (
+              <div>
+                <h3>What the story says</h3>
+                <p>{analysis.summary.story}</p>
+              </div>
+            ) : null}
+            {analysis.summary.findings ? (
+              <div>
+                <h3>What Journol found</h3>
+                <p>{analysis.summary.findings}</p>
+              </div>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
 
-        <aside className="gaps" aria-labelledby="gaps-heading">
-          <h2 id="gaps-heading">What the story leaves open</h2>
-          <p className="muted small" style={{ margin: 0 }}>Tap one to see it in the story.</p>
-          <ul className="gap-list">
+      <section className="open-questions" aria-labelledby="gaps-heading">
+        <h2 id="gaps-heading">What the story leaves open</h2>
+        {gaps.length ? (
+          <ol className="gap-list">
             {gaps.map((gap) => (
               <li key={gap.number}>
-                <GapRow gap={gap} report={gap.relatedId ? reportsById.get(gap.relatedId) : undefined} active={activeGap === gap.number} onSelect={() => selectGap(gap.number)} />
+                <GapRow gap={gap} report={gap.relatedId ? reportsById.get(gap.relatedId) : undefined} />
               </li>
             ))}
-          </ul>
-          {!gaps.length ? <p className="muted small">Journol didn&apos;t find clear gaps in this story.</p> : null}
-        </aside>
-      </div>
+          </ol>
+        ) : (
+          <p className="muted small">Journol didn&apos;t find clear gaps in this story.</p>
+        )}
+      </section>
 
       <section aria-labelledby="angles-heading" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
         <div className="angles-head">
@@ -204,51 +212,22 @@ function SourcesPanel({ analysis, angles }: { analysis: StoredAnalysis; angles: 
   );
 }
 
-function GapRow({ gap, report, active, onSelect }: { gap: StoryGap; report?: RelatedReport; active: boolean; onSelect: () => void }) {
+function GapRow({ gap, report }: { gap: StoryGap; report?: RelatedReport }) {
   return (
-    <button type="button" className="gap-row" aria-pressed={active} onClick={onSelect}>
+    <div className="gap-row">
       <span className="gap-badge" aria-hidden="true">{gap.number}</span>
       <span className="gap-body">
         <span className="gap-kind">{GAP_KIND_LABELS[gap.kind]}</span>
-        <span>{gap.question}</span>
+        <span className="gap-question">{gap.question}</span>
+        {gap.excerpt ? <span className="gap-quote">The story says: “{gap.excerpt}”</span> : null}
         {report ? (
           <span className="small muted">
-            From <a href={report.url} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>{reportCredit(report)}</a>
+            From <a href={report.url} target="_blank" rel="noreferrer">{reportCredit(report)}</a>
           </span>
         ) : null}
       </span>
-    </button>
+    </div>
   );
-}
-
-function highlight(paragraph: string, gaps: StoryGap[], active: number | null, onSelect: (number: number) => void): ReactNode[] {
-  const spans = gaps
-    .flatMap((gap) => {
-      if (!gap.excerpt) return [];
-      const found = findExcerpt(paragraph, gap.excerpt);
-      return found ? [{ ...found, number: gap.number }] : [];
-    })
-    .sort((left, right) => left.start - right.start);
-  const parts: ReactNode[] = [];
-  let cursor = 0;
-  for (const span of spans) {
-    if (span.start < cursor) continue;
-    if (span.start > cursor) parts.push(paragraph.slice(cursor, span.start));
-    parts.push(
-      <mark
-        key={span.number}
-        id={`gap-mark-${span.number}`}
-        data-active={active === span.number}
-        onClick={() => onSelect(span.number)}
-      >
-        <span className="gap-badge">{span.number}</span>
-        {paragraph.slice(span.start, span.end)}
-      </mark>,
-    );
-    cursor = span.end;
-  }
-  if (cursor < paragraph.length) parts.push(paragraph.slice(cursor));
-  return parts;
 }
 
 function AngleCard({ angle, reportsById }: { angle: StoredAngle; reportsById: Map<string, RelatedReport> }) {

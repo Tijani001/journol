@@ -78,6 +78,7 @@ suite("routes", () => {
     const analysis = await getAnalysis(userId, analysisId);
     expect(analysis?.article.title).toBe(STORY.title);
     expect(analysis?.gaps).toHaveLength(4);
+    expect(analysis?.summary?.story).toContain("12 clinics");
     expect(analysis?.related.map((report) => report.id)).toEqual(["R1", "R2", "R3"]);
     expect(analysis?.angles.map((angle) => [angle.round, angle.headline])).toEqual([
       [1, "Who is behind Acme?"],

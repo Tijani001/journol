@@ -81,3 +81,19 @@ describe("angles", () => {
     expect("angle" in result && result.angle.steps).toHaveLength(3);
   });
 });
+
+describe("summary", () => {
+  it("removes report ids and keeps years found in the story or related reports", async () => {
+    const { buildSummary } = await import("@/lib/engine/grounding");
+    const summary = buildSummary(RAW_ANALYSIS, STORY, REPORTS, today);
+    expect(summary?.findings).toBe("The story never says who owns Acme or how many clinics have started. Daily Ledger reported in 2024 that Acme left four of six clinics in Sokoto unfinished.");
+    expect(summary?.story).toContain("12 clinics");
+  });
+
+  it("drops a paragraph that brings in a year from nowhere", async () => {
+    const { buildSummary } = await import("@/lib/engine/grounding");
+    const summary = buildSummary({ story_summary: "Clinics were first promised in 1998.", findings_summary: "Nobody asks who owns Acme." }, STORY, REPORTS, today);
+    expect(summary).toEqual({ story: "", findings: "Nobody asks who owns Acme." });
+    expect(buildSummary({ story_summary: "", findings_summary: "" }, STORY, REPORTS, today)).toBeNull();
+  });
+});

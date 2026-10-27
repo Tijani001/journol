@@ -65,6 +65,8 @@ const ANGLE_ITEM = {
 export const ANALYSIS_SCHEMA = {
   type: "object",
   properties: {
+    story_summary: { type: "string" },
+    findings_summary: { type: "string" },
     gaps: {
       type: "array",
       items: {
@@ -90,7 +92,7 @@ export const ANALYSIS_SCHEMA = {
     },
     angles: { type: "array", items: ANGLE_ITEM },
   },
-  required: ["gaps", "related_notes", "angles"],
+  required: ["story_summary", "findings_summary", "gaps", "related_notes", "angles"],
   additionalProperties: false,
 } as const;
 
@@ -118,6 +120,8 @@ export type RawAngle = {
 };
 
 export type RawAnalysis = {
+  story_summary: string;
+  findings_summary: string;
   gaps: Array<{ kind: string; question: string; excerpt: string | null; related_id: string | null }>;
   related_notes: Array<{ id: string; note: string }>;
   angles: RawAngle[];
@@ -198,7 +202,11 @@ export function analysisInstructions(today: Date) {
   return `You help a journalist find new angles in a news story that is already published. Today is ${isoDay(today)}.
 You are given the story and a numbered list of related reports from other outlets, found by a web search.
 
-First, list the story's gaps: up to 6 things it leaves open. Each gap is:
+First, summarise:
+- story_summary: 2 or 3 plain sentences on what the story reports: who, what, where, when, how much. Only facts the story states.
+- findings_summary: 2 or 3 plain sentences on what you found: the most important things the story leaves open, and what other outlets' reporting adds that the story doesn't mention. Name outlets by name, never by id. If no related reports were found, say so in a few words.
+
+Then list the story's gaps: up to 6 things it leaves open. Each gap is:
 - kind: what sort of gap it is.
 - question: the open question in one plain sentence (e.g. "Who owns Acme Construction Ltd?").
 - excerpt: a short passage (5 to 25 words) copied exactly, word for word, from the story, that shows the gap. Copy within one paragraph only.
