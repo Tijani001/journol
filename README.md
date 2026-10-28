@@ -7,7 +7,7 @@ Paste a link, or pick one of today's stories. Journol then:
 1. **Reads the story** and keeps its paragraphs.
 2. **Searches the web** for related coverage: other outlets on the same event, earlier reporting on the people and companies named, and how similar promises turned out. Copies of the same report or press release count once.
 3. **Finds what the story leaves open.** These are numbered gaps, each tied to the story's own words or to a related report.
-4. **Suggests three angles to chase.** Each one says why it matters and gives three first steps, where to look, who to ask, and whether anyone has already reported it. "Show different angles" gives up to two more sets.
+4. **Suggests three angles to chase.** Each one says why it matters and gives three first steps, where to look, who to ask, and whether anyone has already reported it. "More angles" adds up to two more sets below.
 
 Journalists can save angles to **My angles**, tick off steps, and mark each angle as New, Reporting or Published. **My stories** lists every story they've run. If a link can't be read (a paywall, or a site that blocks automatic reading), they can paste the story text instead. Each angle has a 👍/👎 rating.
 

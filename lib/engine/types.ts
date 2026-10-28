@@ -2,7 +2,7 @@
 
 export const ENGINE_VERSION = "journol-2.0";
 
-/** Rounds of angles per story: the first set plus up to two "Show different angles". */
+/** Rounds of angles per story: the first set plus up to two "More angles". */
 export const MAX_ROUNDS = 3;
 
 export const GAP_KINDS = [

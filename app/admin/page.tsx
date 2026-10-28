@@ -11,7 +11,7 @@ const FAILURE_LABELS: Record<string, string> = {
   read: "Couldn't read the link",
   search: "Web search unavailable",
   angles: "No angles passed the checks",
-  more_angles: "\"Show different angles\" failed",
+  more_angles: "\"More angles\" failed",
   analysis: "Analysis crashed",
 };
 

@@ -10,7 +10,6 @@ import type { StoredAnalysis, StoredAngle } from "@/lib/server/store";
 
 export function StoryView({ analysis, feedback }: { analysis: StoredAnalysis; feedback: Record<string, "useful" | "not_useful"> }) {
   const [angles, setAngles] = useState<StoredAngle[]>(analysis.angles);
-  const [round, setRound] = useState(1);
   const [showSources, setShowSources] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [moreError, setMoreError] = useState("");
@@ -18,18 +17,11 @@ export function StoryView({ analysis, feedback }: { analysis: StoredAnalysis; fe
   const { article, gaps, related } = analysis;
   const reportsById = useMemo(() => new Map(related.map((report) => [report.id, report])), [related]);
   const rounds = Math.max(1, ...angles.map((angle) => angle.round));
-  const shown = angles.filter((angle) => angle.round === round);
+  const roundNumbers = [...new Set(angles.map((angle) => angle.round))].sort((left, right) => left - right);
+  const canAskForMore = rounds < MAX_ROUNDS;
 
-  async function showDifferentAngles() {
+  async function moreAngles() {
     setMoreError("");
-    if (round < rounds) {
-      setRound(round + 1);
-      return;
-    }
-    if (rounds >= MAX_ROUNDS) {
-      setRound(1);
-      return;
-    }
     setLoadingMore(true);
     try {
       const response = await fetch(`/api/analyses/${analysis.id}/angles`, { method: "POST" });
@@ -39,19 +31,12 @@ export function StoryView({ analysis, feedback }: { analysis: StoredAnalysis; fe
         return;
       }
       setAngles((current) => [...current, ...(body.angles as StoredAngle[])]);
-      setRound(body.round as number);
     } catch {
       setMoreError("Journol couldn't be reached. Check your connection and try again.");
     } finally {
       setLoadingMore(false);
     }
   }
-
-  const moreLabel = loadingMore
-    ? "Finding different angles…"
-    : round < rounds || rounds < MAX_ROUNDS
-      ? "Show different angles"
-      : "Back to the first angles";
 
   return (
     <main className="page">
@@ -121,19 +106,28 @@ export function StoryView({ analysis, feedback }: { analysis: StoredAnalysis; fe
             <h2 id="angles-heading">Angles to chase</h2>
             <p>{anglesSubtitle(analysis)}</p>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-            {rounds > 1 ? <span className="round-note">Set {round} of {rounds}</span> : null}
-            <button type="button" className="button" onClick={showDifferentAngles} disabled={loadingMore}>
-              {moreLabel}
-            </button>
+        </div>
+        {roundNumbers.map((round) => (
+          <div key={round} className="angle-round">
+            {round > 1 ? <h3 className="round-heading">More angles</h3> : null}
+            <div className="angle-grid">
+              {angles.filter((angle) => angle.round === round).map((angle) => (
+                <AngleCard key={angle.id} angle={angle} reportsById={reportsById} verdict={feedback[angle.id] ?? null} />
+              ))}
+            </div>
           </div>
+        ))}
+        <div className="more-angles">
+          {canAskForMore ? (
+            <button type="button" className="button" onClick={moreAngles} disabled={loadingMore} aria-busy={loadingMore}>
+              {loadingMore ? "Finding more angles…" : "More angles"}
+            </button>
+          ) : (
+            <p className="muted small" style={{ margin: 0 }}>That&apos;s every angle Journol can suggest for this story.</p>
+          )}
+          {loadingMore ? <span className="muted small">This takes about 20 seconds.</span> : null}
         </div>
         {moreError ? <p className="form-error" role="alert">{moreError}</p> : null}
-        <div className="angle-grid">
-          {shown.map((angle) => (
-            <AngleCard key={angle.id} angle={angle} reportsById={reportsById} verdict={feedback[angle.id] ?? null} />
-          ))}
-        </div>
       </section>
     </main>
   );
