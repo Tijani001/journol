@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { AngleFeedback } from "@/app/components/angle-feedback";
 import { CoverageTag } from "@/app/components/coverage-tag";
 import { ANGLE_TYPE_LABELS, GAP_KIND_LABELS, MAX_ROUNDS, type RelatedReport, type StoryGap } from "@/lib/engine/types";
-import { longDate, plural, reportCredit } from "@/lib/format";
+import { isPastedUrl, longDate, plural, reportCredit } from "@/lib/format";
 import type { StoredAnalysis, StoredAngle } from "@/lib/server/store";
 
-export function StoryView({ analysis }: { analysis: StoredAnalysis }) {
+export function StoryView({ analysis, feedback }: { analysis: StoredAnalysis; feedback: Record<string, "useful" | "not_useful"> }) {
   const [angles, setAngles] = useState<StoredAngle[]>(analysis.angles);
   const [round, setRound] = useState(1);
   const [showSources, setShowSources] = useState(false);
@@ -61,11 +62,15 @@ export function StoryView({ analysis }: { analysis: StoredAnalysis }) {
           {article.publishedAt ? ` · ${longDate(article.publishedAt)}` : ""}
         </p>
         <h1 className="story-title">{article.title}</h1>
-        <div className="toolbar">
-          <a className="button" href={article.url} target="_blank" rel="noreferrer">
-            Read the full story on {article.publisher} ↗
-          </a>
-        </div>
+        {isPastedUrl(article.url) ? (
+          <p className="muted small" style={{ margin: 0 }}>From text you pasted.</p>
+        ) : (
+          <div className="toolbar">
+            <a className="button" href={article.url} target="_blank" rel="noreferrer">
+              Read the full story on {article.publisher} ↗
+            </a>
+          </div>
+        )}
         <SearchLine
           analysis={analysis}
           open={showSources}
@@ -126,7 +131,7 @@ export function StoryView({ analysis }: { analysis: StoredAnalysis }) {
         {moreError ? <p className="form-error" role="alert">{moreError}</p> : null}
         <div className="angle-grid">
           {shown.map((angle) => (
-            <AngleCard key={angle.id} angle={angle} reportsById={reportsById} />
+            <AngleCard key={angle.id} angle={angle} reportsById={reportsById} verdict={feedback[angle.id] ?? null} />
           ))}
         </div>
       </section>
@@ -230,7 +235,7 @@ function GapRow({ gap, report }: { gap: StoryGap; report?: RelatedReport }) {
   );
 }
 
-function AngleCard({ angle, reportsById }: { angle: StoredAngle; reportsById: Map<string, RelatedReport> }) {
+function AngleCard({ angle, reportsById, verdict }: { angle: StoredAngle; reportsById: Map<string, RelatedReport>; verdict: "useful" | "not_useful" | null }) {
   const reports = angle.relatedIds.map((id) => reportsById.get(id)).filter((report): report is RelatedReport => Boolean(report));
   return (
     <article className="angle-card">
@@ -248,6 +253,7 @@ function AngleCard({ angle, reportsById }: { angle: StoredAngle; reportsById: Ma
         <span className="angle-basis">Built on related coverage: {reports.map(reportCredit).join("; ")}</span>
       ) : null}
       <Link className="angle-chase" href={`/angle/${angle.id}`}>Chase this angle →</Link>
+      <AngleFeedback angleId={angle.id} initial={verdict} />
     </article>
   );
 }

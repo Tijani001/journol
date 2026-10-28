@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
@@ -42,6 +43,9 @@ export function LinkForm() {
       />
       <button type="submit" className="button button-primary button-large">Find angles</button>
       {error ? <p id="story-link-error" className="form-error" role="alert" style={{ flexBasis: "100%" }}>{error}</p> : null}
+      <p className="muted small" style={{ flexBasis: "100%", margin: 0 }}>
+        Behind a paywall, or no link? <Link href="/read?paste=1">Paste the story text instead</Link>.
+      </p>
     </form>
   );
 }

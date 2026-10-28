@@ -1,12 +1,15 @@
 import { Suspense } from "react";
 import { LinkForm } from "@/app/components/link-form";
 import { TodayStories } from "@/app/components/today-stories";
-import { requireUserId } from "@/lib/server/auth";
+import { Landing } from "@/app/components/landing";
+import { currentUserId } from "@/lib/server/auth";
 import { loadTodaysStories } from "@/lib/server/news-feed";
 import { analysesForUrls } from "@/lib/server/store";
 
-export default async function DiscoverPage() {
-  const userId = await requireUserId("/");
+export default async function HomePage() {
+  // Visitors who aren't signed in see what Journol is; journalists who are see Discover.
+  const userId = await currentUserId();
+  if (!userId) return <Landing />;
   return (
     <main className="page page-discover">
       <section className="hero">

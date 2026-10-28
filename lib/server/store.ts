@@ -2,6 +2,7 @@ import "server-only";
 
 import type { PoolClient } from "pg";
 import { getDatabasePool } from "@/lib/server/database";
+import { isPastedUrl } from "@/lib/format";
 import type { Angle, RelatedReport, SearchStatus, StoryGap, StoryInput, StorySummary } from "@/lib/engine/types";
 
 /**
@@ -46,6 +47,8 @@ function iso(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+export { isPastedUrl };
+
 export async function upsertUser(issuer: string, subject: string): Promise<string> {
   const result = await getDatabasePool().query<{ id: string }>(
     `INSERT INTO users (auth_issuer, auth_subject) VALUES ($1, $2)
@@ -70,6 +73,15 @@ export async function recordUsage(userId: string, kind: "analysis" | "angles"): 
     [userId, kind],
   );
   return String(result.rows[0].id);
+}
+
+/** All AI runs across every journalist since the given time; used for the overall daily cap. */
+export async function totalUsageSince(since: Date): Promise<number> {
+  const result = await getDatabasePool().query<{ count: string }>(
+    "SELECT count(*) FROM usage_events WHERE created_at >= $1",
+    [since],
+  );
+  return Number(result.rows[0].count);
 }
 
 /** Gives back a use that didn't reach the AI (for example, the story couldn't be read). */
@@ -110,17 +122,19 @@ export async function saveAnalysis(input: {
   angles: Angle[];
   engineVersion: string;
   model: string;
+  /** True when the journalist pasted the text instead of Journol reading the link. */
+  pasted?: boolean;
 }): Promise<string> {
   const client = await getDatabasePool().connect();
   try {
     await client.query("BEGIN");
     const article = await client.query<{ id: string }>(
-      `INSERT INTO articles (url, title, publisher, published_at, body)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO articles (url, title, publisher, published_at, body, pasted)
+       VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (url) DO UPDATE SET title = EXCLUDED.title, publisher = EXCLUDED.publisher,
-         published_at = EXCLUDED.published_at, body = EXCLUDED.body, fetched_at = now()
+         published_at = EXCLUDED.published_at, body = EXCLUDED.body, pasted = EXCLUDED.pasted, fetched_at = now()
        RETURNING id`,
-      [input.story.url, input.story.title, input.story.publisher, input.story.publishedAt, input.story.paragraphs.join("\n\n")],
+      [input.story.url, input.story.title, input.story.publisher, input.story.publishedAt, input.story.paragraphs.join("\n\n"), Boolean(input.pasted)],
     );
     const analysis = await client.query<{ id: string }>(
       `INSERT INTO analyses (user_id, article_id, gaps, related, repeated_count, search_status, engine_version, model, summary)
@@ -330,4 +344,163 @@ export async function analysesForUrls(userId: string, urls: string[]): Promise<M
     [userId, urls],
   );
   return new Map(result.rows.map((row) => [row.url, { analysisId: row.id, gaps: Number(row.gaps) }]));
+}
+
+export type StorySummaryRow = {
+  analysisId: string;
+  title: string;
+  publisher: string;
+  analysedAt: string;
+  gaps: number;
+  angles: number;
+  saved: number;
+};
+
+/** Every story the journalist has analysed, newest first. */
+export async function listAnalyses(userId: string): Promise<StorySummaryRow[]> {
+  const result = await getDatabasePool().query(
+    `SELECT an.id, ar.title, ar.publisher, an.created_at, jsonb_array_length(an.gaps) AS gaps,
+            (SELECT count(*) FROM angles g WHERE g.analysis_id = an.id) AS angles,
+            (SELECT count(*) FROM angles g WHERE g.analysis_id = an.id AND g.saved_at IS NOT NULL) AS saved
+     FROM analyses an JOIN articles ar ON ar.id = an.article_id
+     WHERE an.user_id = $1
+     ORDER BY an.created_at DESC LIMIT 300`,
+    [userId],
+  );
+  return result.rows.map((row) => ({
+    analysisId: row.id,
+    title: row.title,
+    publisher: row.publisher,
+    analysedAt: iso(row.created_at) ?? "",
+    gaps: Number(row.gaps),
+    angles: Number(row.angles),
+    saved: Number(row.saved),
+  }));
+}
+
+export type Verdict = "useful" | "not_useful";
+
+/** Records (or clears, with null) the journalist's verdict on one of their own angles. */
+export async function setFeedback(userId: string, angleId: string, verdict: Verdict | null): Promise<boolean> {
+  if (!isUuid(angleId)) return false;
+  const pool = getDatabasePool();
+  const owned = await pool.query("SELECT 1 FROM angles WHERE id = $1 AND user_id = $2", [angleId, userId]);
+  if (!owned.rowCount) return false;
+  if (verdict === null) {
+    await pool.query("DELETE FROM angle_feedback WHERE angle_id = $1 AND user_id = $2", [angleId, userId]);
+  } else {
+    await pool.query(
+      `INSERT INTO angle_feedback (angle_id, user_id, verdict) VALUES ($1, $2, $3)
+       ON CONFLICT (angle_id, user_id) DO UPDATE SET verdict = EXCLUDED.verdict, updated_at = now()`,
+      [angleId, userId, verdict],
+    );
+  }
+  return true;
+}
+
+export async function feedbackFor(userId: string, angleIds: string[]): Promise<Record<string, Verdict>> {
+  if (!angleIds.length) return {};
+  const result = await getDatabasePool().query<{ angle_id: string; verdict: Verdict }>(
+    "SELECT angle_id, verdict FROM angle_feedback WHERE user_id = $1 AND angle_id = ANY($2)",
+    [userId, angleIds],
+  );
+  return Object.fromEntries(result.rows.map((row) => [row.angle_id, row.verdict]));
+}
+
+/** Notes that something failed. Only a short code and the website name are kept. Never throws. */
+export async function recordFailure(input: { userId: string | null; kind: string; code: string; url?: string | null }): Promise<void> {
+  let host: string | null = null;
+  if (input.url && !isPastedUrl(input.url)) {
+    try {
+      host = new URL(input.url).hostname.replace(/^www\./, "");
+    } catch {
+      host = null;
+    }
+  }
+  await getDatabasePool()
+    .query("INSERT INTO failures (user_id, kind, code, host) VALUES ($1, $2, $3, $4)", [input.userId, input.kind.slice(0, 40), input.code.slice(0, 80), host])
+    .catch(() => {});
+  // Keep to the retention promised in the privacy policy: 12 months.
+  await getDatabasePool()
+    .query("DELETE FROM failures WHERE created_at < now() - interval '12 months'; DELETE FROM usage_events WHERE created_at < now() - interval '12 months'")
+    .catch(() => {});
+}
+
+/** Removes the journalist and everything they made. Stories nobody else analysed go too. */
+export async function deleteUserData(userId: string): Promise<void> {
+  const client = await getDatabasePool().connect();
+  try {
+    await client.query("BEGIN");
+    const articles = await client.query<{ article_id: string }>("SELECT DISTINCT article_id FROM analyses WHERE user_id = $1", [userId]);
+    await client.query("DELETE FROM users WHERE id = $1", [userId]);
+    const ids = articles.rows.map((row) => row.article_id);
+    if (ids.length) {
+      await client.query("DELETE FROM articles a WHERE a.id = ANY($1) AND NOT EXISTS (SELECT 1 FROM analyses an WHERE an.article_id = a.id)", [ids]);
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export type OwnerOverview = {
+  journalists: number;
+  newJournalists7d: number;
+  analyses24h: number;
+  analyses7d: number;
+  runs24h: number;
+  useful: number;
+  notUseful: number;
+  failures: Array<{ kind: string; code: string; host: string | null; at: string }>;
+  failureCounts: Array<{ kind: string; code: string; count: number }>;
+  feedback: Array<{ verdict: Verdict; headline: string; storyTitle: string; publisher: string; at: string }>;
+  topOutlets: Array<{ publisher: string; count: number }>;
+};
+
+/** Numbers for the owner's dashboard. Shows headlines and outlets, never story text. */
+export async function ownerOverview(): Promise<OwnerOverview> {
+  const pool = getDatabasePool();
+  const [counts, failures, failureCounts, feedback, outlets] = await Promise.all([
+    pool.query(`SELECT
+      (SELECT count(*) FROM users) AS journalists,
+      (SELECT count(*) FROM users WHERE created_at > now() - interval '7 days') AS new7,
+      (SELECT count(*) FROM analyses WHERE created_at > now() - interval '1 day') AS a24,
+      (SELECT count(*) FROM analyses WHERE created_at > now() - interval '7 days') AS a7,
+      (SELECT count(*) FROM usage_events WHERE created_at > now() - interval '1 day') AS r24,
+      (SELECT count(*) FROM angle_feedback WHERE verdict = 'useful') AS useful,
+      (SELECT count(*) FROM angle_feedback WHERE verdict = 'not_useful') AS not_useful`),
+    pool.query("SELECT kind, code, host, created_at FROM failures ORDER BY created_at DESC LIMIT 40"),
+    pool.query("SELECT kind, code, count(*) AS count FROM failures WHERE created_at > now() - interval '7 days' GROUP BY kind, code ORDER BY count DESC LIMIT 12"),
+    pool.query(`SELECT f.verdict, g.content->>'headline' AS headline, ar.title, ar.publisher, f.updated_at
+      FROM angle_feedback f JOIN angles g ON g.id = f.angle_id JOIN analyses an ON an.id = g.analysis_id JOIN articles ar ON ar.id = an.article_id
+      ORDER BY f.updated_at DESC LIMIT 40`),
+    pool.query(`SELECT ar.publisher, count(*) AS count FROM analyses an JOIN articles ar ON ar.id = an.article_id
+      WHERE an.created_at > now() - interval '30 days' GROUP BY ar.publisher ORDER BY count DESC LIMIT 10`),
+  ]);
+  const row = counts.rows[0];
+  return {
+    journalists: Number(row.journalists),
+    newJournalists7d: Number(row.new7),
+    analyses24h: Number(row.a24),
+    analyses7d: Number(row.a7),
+    runs24h: Number(row.r24),
+    useful: Number(row.useful),
+    notUseful: Number(row.not_useful),
+    failures: failures.rows.map((item) => ({ kind: item.kind, code: item.code, host: item.host, at: iso(item.created_at) ?? "" })),
+    failureCounts: failureCounts.rows.map((item) => ({ kind: item.kind, code: item.code, count: Number(item.count) })),
+    feedback: feedback.rows.map((item) => ({ verdict: item.verdict, headline: item.headline, storyTitle: item.title, publisher: item.publisher, at: iso(item.updated_at) ?? "" })),
+    topOutlets: outlets.rows.map((item) => ({ publisher: item.publisher, count: Number(item.count) })),
+  };
+}
+
+export async function checkDatabase(): Promise<boolean> {
+  try {
+    await getDatabasePool().query("SELECT 1");
+    return true;
+  } catch {
+    return false;
+  }
 }

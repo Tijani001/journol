@@ -23,3 +23,8 @@ export function reportCredit(report: { publisher: string; publishedAt: string | 
   const when = monthYear(report.publishedAt);
   return when ? `${report.publisher}, ${when}` : report.publisher;
 }
+
+/** Stories pasted as text get a made-up "pasted:" address instead of a real link. */
+export function isPastedUrl(url: string): boolean {
+  return url.startsWith("pasted:");
+}

@@ -5,8 +5,8 @@ import { MAX_ROUNDS } from "@/lib/engine/types";
 import { currentUserId } from "@/lib/server/auth";
 import { isDatabaseConfigured } from "@/lib/server/database";
 import { engineConfigured, engineServices } from "@/lib/server/engine";
-import { QUOTA_MESSAGE, claimRun } from "@/lib/server/quota";
-import { addAngleRound, getAnalysis } from "@/lib/server/store";
+import { claimRun } from "@/lib/server/quota";
+import { addAngleRound, getAnalysis, recordFailure } from "@/lib/server/store";
 
 export const maxDuration = 60;
 
@@ -32,9 +32,9 @@ export async function POST(_request: Request, context: { params: Promise<{ analy
     return apiError("You've seen every angle Journol can suggest for this story.", 409);
   }
   if (!engineConfigured()) return apiError("Journol's AI isn't set up yet.", 503);
-  const run = await claimRun(userId, "angles").catch(() => undefined);
-  if (run === undefined) return apiError("Journol couldn't reach its storage. Try again in a moment.", 503);
-  if (!run) return apiError(QUOTA_MESSAGE, 429);
+  const claim = await claimRun(userId, "angles").catch(() => undefined);
+  if (claim === undefined) return apiError("Journol couldn't reach its storage. Try again in a moment.", 503);
+  if (!claim.ok) return apiError(claim.message, 429);
 
   try {
     const services = engineServices();
@@ -46,6 +46,7 @@ export async function POST(_request: Request, context: { params: Promise<{ analy
       previous: analysis.angles,
     }, { model: services.model });
     if (!angles.length) {
+      await recordFailure({ userId, kind: "angles", code: "NO_MORE_ANGLES", url: analysis.article.url });
       return apiError("Journol couldn't find more angles it could stand behind for this story.", 422);
     }
     const round = lastRound + 1;
@@ -57,6 +58,7 @@ export async function POST(_request: Request, context: { params: Promise<{ analy
     );
   } catch (error) {
     console.error("Journol could not find more angles:", error instanceof Error ? error.message : String(error));
+    await recordFailure({ userId, kind: "more_angles", code: error instanceof Error ? error.message.slice(0, 80) : "UNKNOWN", url: analysis.article.url });
     return apiError("Something went wrong while finding more angles. Please try again.", 502);
   }
 }

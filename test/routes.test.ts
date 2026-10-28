@@ -2,11 +2,13 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { POST as analyse } from "@/app/api/analyses/route";
 import { POST as moreAngles } from "@/app/api/analyses/[analysisId]/angles/route";
 import { PATCH as patchAngle } from "@/app/api/angles/[angleId]/route";
+import { PUT as rateAngle } from "@/app/api/angles/[angleId]/feedback/route";
+import { DELETE as deleteAccount } from "@/app/api/account/route";
 import { ArticleReadError } from "@/lib/server/article-reader";
 import { setIdentityForTesting } from "@/lib/server/auth";
 import { getDatabasePool } from "@/lib/server/database";
 import { setEngineServicesForTesting } from "@/lib/server/engine";
-import { getAnalysis, getAngle, listSavedAngles, upsertUser } from "@/lib/server/store";
+import { feedbackFor, getAnalysis, getAngle, listAnalyses, listSavedAngles, ownerOverview, upsertUser } from "@/lib/server/store";
 import { PLAN, RAW_ANALYSIS, RAW_MORE_ANGLES, STORY, coverage, fakeModel, rawAngle } from "@/test/fixtures";
 
 /**
@@ -45,7 +47,8 @@ suite("routes", () => {
   beforeEach(async () => {
     identity = { issuer: "test", subject: "alice" };
     delete process.env.JOURNOL_DAILY_LIMIT;
-    await getDatabasePool().query("TRUNCATE users, articles, analyses, angles, usage_events CASCADE");
+    delete process.env.JOURNOL_GLOBAL_DAILY_LIMIT;
+    await getDatabasePool().query("TRUNCATE users, articles, analyses, angles, usage_events, angle_feedback, failures CASCADE");
   });
   afterEach(() => setEngineServicesForTesting(null));
   afterAll(async () => {
@@ -155,7 +158,7 @@ suite("routes", () => {
     process.env.JOURNOL_DAILY_LIMIT = "1";
     useEngine(undefined, async () => { throw new ArticleReadError("BLOCKED", "The website didn't let Journol read this story. Try another link."); });
     const streamed = await events(await analyseStory());
-    expect(streamed).toEqual([{ stage: "reading" }, { error: "The website didn't let Journol read this story. Try another link." }]);
+    expect(streamed).toEqual([{ stage: "reading" }, { error: "The website didn't let Journol read this story. Try another link.", canPaste: true }]);
     useEngine();
     const ok = await events(await analyseStory());
     expect(ok.at(-1)).toHaveProperty("analysisId");
@@ -168,5 +171,63 @@ suite("routes", () => {
     expect(streamed.at(-1)).toEqual({ error: "Journol couldn't find angles it could stand behind in this story. Try another story." });
     const count = await getDatabasePool().query("SELECT count(*)::int AS n FROM analyses");
     expect(count.rows[0].n).toBe(0);
+  });
+
+  it("analyses pasted text, and never offers a link for it", async () => {
+    const fake = useEngine(undefined, async () => { throw new Error("must not fetch pasted stories"); });
+    const text = `${STORY.title}\n\n${STORY.paragraphs.join("\n\n")}`;
+    const streamed = await events(await analyse(request("/api/analyses", { method: "POST", body: JSON.stringify({ text }) })));
+    const { analysisId } = streamed.at(-1);
+    expect(analysisId).toBeTruthy();
+    const userId = await upsertUser("test", "alice");
+    const analysis = await getAnalysis(userId, analysisId);
+    expect(analysis?.article.url).toMatch(/^pasted:/);
+    expect(analysis?.article.title).toBe(STORY.title);
+    expect(fake.calls.some((call) => call.name === "story_angles")).toBe(true);
+    expect((await listAnalyses(userId)).map((story) => story.title)).toEqual([STORY.title]);
+  });
+
+  it("offers to paste the text when a link can't be read, and records the failure", async () => {
+    useEngine(undefined, async () => { throw new ArticleReadError("BLOCKED", "The website didn't let Journol read this story. Try another link."); });
+    const streamed = await events(await analyseStory("https://www.punchng.com/blocked-story"));
+    expect(streamed.at(-1)).toMatchObject({ canPaste: true });
+    const overview = await ownerOverview();
+    expect(overview.failures[0]).toMatchObject({ kind: "read", code: "BLOCKED", host: "punchng.com" });
+  });
+
+  it("stops everyone at the overall daily cap", async () => {
+    process.env.JOURNOL_GLOBAL_DAILY_LIMIT = "1";
+    useEngine();
+    await events(await analyseStory());
+    identity = { issuer: "test", subject: "bob" };
+    const response = await analyseStory("https://sentinel.example/another-story");
+    expect(response.status).toBe(429);
+    expect((await response.json()).error).toContain("paused new stories");
+  });
+
+  it("records ratings only on the journalist's own angles", async () => {
+    useEngine();
+    const [, , , { analysisId }] = await events(await analyseStory());
+    const alice = await upsertUser("test", "alice");
+    const angleId = (await getAnalysis(alice, analysisId))!.angles[0].id;
+    const rate = (verdict: unknown) => rateAngle(request(`/api/angles/${angleId}/feedback`, { method: "PUT", body: JSON.stringify({ verdict }) }), { params: Promise.resolve({ angleId }) });
+    expect((await rate("useful")).status).toBe(200);
+    expect(await feedbackFor(alice, [angleId])).toEqual({ [angleId]: "useful" });
+    expect((await rate("brilliant")).status).toBe(400);
+    expect((await rate(null)).status).toBe(200);
+    expect(await feedbackFor(alice, [angleId])).toEqual({});
+    identity = { issuer: "test", subject: "bob" };
+    expect((await rate("not_useful")).status).toBe(404);
+  });
+
+  it("deletes everything when a journalist deletes their account", async () => {
+    useEngine();
+    await events(await analyseStory());
+    const bad = await deleteAccount(request("/api/account", { method: "DELETE", body: JSON.stringify({ confirm: "yes" }) }));
+    expect(bad.status).toBe(400);
+    const done = await deleteAccount(request("/api/account", { method: "DELETE", body: JSON.stringify({ confirm: "DELETE" }) }));
+    expect(done.status).toBe(200);
+    const left = await getDatabasePool().query("SELECT (SELECT count(*) FROM analyses)::int AS a, (SELECT count(*) FROM angles)::int AS g, (SELECT count(*) FROM articles)::int AS r, (SELECT count(*) FROM users)::int AS u");
+    expect(left.rows[0]).toEqual({ a: 0, g: 0, r: 0, u: 0 });
   });
 });

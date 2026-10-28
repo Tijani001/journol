@@ -1,5 +1,5 @@
 import { ANGLE_TYPE_LABELS, type Angle, type RelatedReport } from "@/lib/engine/types";
-import { reportCredit } from "@/lib/format";
+import { isPastedUrl, reportCredit } from "@/lib/format";
 
 /** A plain-text reporting brief a journalist can paste into an email or notes. */
 export function reportingBrief(input: {
@@ -21,7 +21,7 @@ export function reportingBrief(input: {
     `Why it's worth chasing: ${angle.why}`,
     "",
     `From: "${story.title}" — ${story.publisher}`,
-    story.url,
+    ...(isPastedUrl(story.url) ? [] : [story.url]),
   ];
   if (angle.storyExcerpts.length) {
     lines.push("", "What the story says:", ...angle.storyExcerpts.map((excerpt) => `  “${excerpt}”`));

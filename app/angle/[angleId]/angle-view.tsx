@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { AngleFeedback } from "@/app/components/angle-feedback";
 import { CoverageTag } from "@/app/components/coverage-tag";
 import { reportingBrief } from "@/lib/brief";
 import { ANGLE_TYPE_LABELS, type RelatedReport } from "@/lib/engine/types";
@@ -10,7 +11,7 @@ import type { AngleStatus, AngleWithStory } from "@/lib/server/store";
 
 const STATUS_LABELS: Record<AngleStatus, string> = { new: "New", reporting: "Reporting", published: "Published" };
 
-export function AngleView({ angle }: { angle: AngleWithStory }) {
+export function AngleView({ angle, verdict }: { angle: AngleWithStory; verdict: "useful" | "not_useful" | null }) {
   const [saved, setSaved] = useState(Boolean(angle.savedAt));
   const [status, setStatus] = useState<AngleStatus>(angle.status);
   const [stepsDone, setStepsDone] = useState<boolean[]>(angle.stepsDone);
@@ -105,6 +106,7 @@ export function AngleView({ angle }: { angle: AngleWithStory }) {
           </label>
         ) : null}
         <span className="small muted">{done === 0 ? "No steps done yet" : `${done} of ${stepsDone.length} steps done`}</span>
+        <AngleFeedback angleId={angle.id} initial={verdict} />
       </div>
       {error ? <p className="form-error" role="alert">{error}</p> : null}
 

@@ -53,3 +53,26 @@ export async function requireUserId(returnTo: string): Promise<string> {
   if (!userId) redirect(`/sign-in?redirect_url=${encodeURIComponent(returnTo)}`);
   return userId;
 }
+
+/**
+ * The owner (or owners) of this Journol, who can see the dashboard. Set
+ * JOURNOL_ADMIN_USER_IDS to a comma-separated list of Clerk user IDs (shown on
+ * the account page).
+ */
+export async function isOwner(): Promise<boolean> {
+  const allowed = (process.env.JOURNOL_ADMIN_USER_IDS ?? "").split(",").map((id) => id.trim()).filter(Boolean);
+  if (!allowed.length) return false;
+  const identity = resolverForTesting ? await resolverForTesting() : await currentIdentity();
+  return Boolean(identity && allowed.includes(identity.subject));
+}
+
+/** The signed-in journalist's sign-in account ID (Clerk user ID), or null. */
+export async function currentAccountId(): Promise<string | null> {
+  const identity = resolverForTesting ? await resolverForTesting() : await currentIdentity();
+  return identity?.subject ?? null;
+}
+
+/** The verified identity, honouring the test seam. */
+export async function signedInIdentity(): Promise<Identity | null> {
+  return resolverForTesting ? resolverForTesting() : currentIdentity();
+}

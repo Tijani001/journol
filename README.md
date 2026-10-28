@@ -9,7 +9,15 @@ Paste a link, or pick one of today's stories. Journol then:
 3. **Finds what the story leaves open.** These are numbered gaps, each tied to the story's own words or to a related report.
 4. **Suggests three angles to chase.** Each one says why it matters and gives three first steps, where to look, who to ask, and whether anyone has already reported it. "Show different angles" gives up to two more sets.
 
-Journalists can save angles to **My angles**, tick off steps, and mark each angle as New, Reporting or Published.
+Journalists can save angles to **My angles**, tick off steps, and mark each angle as New, Reporting or Published. **My stories** lists every story they've run. If a link can't be read (a paywall, or a site that blocks automatic reading), they can paste the story text instead. Each angle has a 👍/👎 rating.
+
+Visitors who aren't signed in see a front page explaining Journol, with a worked example. Terms and a privacy policy (written for the Nigeria Data Protection Act 2023) are at `/terms` and `/privacy`, and journalists can delete their account and all their data at `/account`.
+
+## For the owner
+
+- **`/admin`**: journalists, stories, runs against the overall daily cap, what's failing (by website), and how angles are rated. Set `JOURNOL_ADMIN_USER_IDS` to your Clerk user ID, which is shown on `/account`.
+- **`/api/health`**: a public status check (database, today's stories, AI and search configured) for an uptime monitor.
+- **Spending:** each journalist gets `JOURNOL_DAILY_LIMIT` runs a day (default 25), and everyone together gets `JOURNOL_GLOBAL_DAILY_LIMIT` (default 200).
 
 ## What keeps the angles honest
 
@@ -51,6 +59,9 @@ npm run build
 | `app/story/[analysisId]` | The story with numbered gaps, related sources and angles |
 | `app/angle/[angleId]` | One angle: steps, where to look, who to ask, coverage, and the reporting brief |
 | `app/angles` | My angles |
+| `app/stories` | My stories |
+| `app/account`, `app/admin` | The journalist's account page; the owner dashboard |
+| `app/terms`, `app/privacy` | Terms of use and privacy policy |
 | `app/api/analyses` | Reads, searches and analyses a story, streaming progress |
 | `app/api/analyses/[id]/angles` | A different set of angles |
 | `app/api/angles/[id]` | Saving an angle, its status and its steps |
