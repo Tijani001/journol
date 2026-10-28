@@ -240,14 +240,6 @@ h1, h2, h3 { margin: 0; }
 .how-steps li { display: flex; flex-direction: column; gap: 6px; font-size: 14px; line-height: 1.55; color: var(--muted); }
 .how-steps strong { color: var(--ink); font-size: 16px; }
 .how-number { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--purple-soft); color: var(--purple); font-weight: 800; font-size: 13px; }
-.example { max-width: 860px; padding: 20px 0 0; border-top: 2px solid var(--ink); display: flex; flex-direction: column; gap: 4px; }
-.example-title { font-family: var(--heading); font-size: 24px; line-height: 1.2; font-weight: 800; }
-.example h4 { margin: 0 0 6px; font-size: 13px; font-weight: 700; color: var(--muted); }
-.example .brief-grid p { margin: 0; font-size: 15px; line-height: 1.6; }
-.example-gap { display: flex; gap: 12px; padding: 16px 0; margin-top: 12px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-.example-gap .gap-badge { margin-top: 2px; flex: 0 0 auto; }
-.example-angle { display: flex; flex-direction: column; gap: 8px; padding-top: 16px; }
-.example .example-angle-title { font-family: var(--heading); font-size: 20px; font-weight: 800; color: var(--ink); margin: 0; }
 .honest-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 16px 40px; font-size: 15px; line-height: 1.6; color: var(--muted); }
 .honest-list strong { color: var(--ink); }
 .button-danger { border-color: var(--danger); color: var(--danger); }

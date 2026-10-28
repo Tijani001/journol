@@ -11,7 +11,7 @@ Paste a link, or pick one of today's stories. Journol then:
 
 Journalists can save angles to **My angles**, tick off steps, and mark each angle as New, Reporting or Published. **My stories** lists every story they've run. If a link can't be read (a paywall, or a site that blocks automatic reading), they can paste the story text instead. Each angle has a 👍/👎 rating.
 
-Visitors who aren't signed in see a front page explaining Journol, with a worked example. Terms and a privacy policy (written for the Nigeria Data Protection Act 2023) are at `/terms` and `/privacy`, and journalists can delete their account and all their data at `/account`.
+Visitors who aren't signed in see a front page explaining what Journol does and how it works. Terms and a privacy policy (written for the Nigeria Data Protection Act 2023) are at `/terms` and `/privacy`, and journalists can delete their account and all their data at `/account`.
 
 ## For the owner
 

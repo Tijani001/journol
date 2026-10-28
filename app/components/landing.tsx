@@ -1,7 +1,6 @@
 import Link from "next/link";
-import { CoverageTag } from "@/app/components/coverage-tag";
 
-/** What a visitor sees before signing in: what Journol does, a worked example, and how it keeps itself honest. */
+/** What a visitor sees before signing in: what Journol does, how it works, and how it keeps itself honest. */
 export function Landing() {
   return (
     <main className="page page-discover landing">
@@ -39,46 +38,6 @@ export function Landing() {
             <span>What the story leaves open, three angles with first steps, where to look and who to ask, and whether anyone has reported it yet.</span>
           </li>
         </ol>
-      </section>
-
-      <section aria-labelledby="example-heading" className="landing-section">
-        <div className="section-head">
-          <div>
-            <h2 id="example-heading">What you get</h2>
-            <p>An example, using an invented story and invented outlets, to show the format.</p>
-          </div>
-        </div>
-        <div className="example">
-          <p className="story-source">The Sentinel · Example</p>
-          <h3 className="example-title">FG to build 12 clinics in Zamfara mining communities</h3>
-          <div className="brief-grid" style={{ marginTop: 16 }}>
-            <div>
-              <h4>What the story says</h4>
-              <p>The Federal Government says it will build 12 clinics for ₦4.5 billion, with Acme Construction Ltd as contractor and a December deadline.</p>
-            </div>
-            <div>
-              <h4>What Journol found</h4>
-              <p>The story never says who owns Acme or how many clinics have started. Another outlet reported in 2024 that Acme left four of six clinics in Sokoto unfinished.</p>
-            </div>
-          </div>
-          <div className="example-gap">
-            <span className="gap-badge" aria-hidden="true">1</span>
-            <span className="gap-body">
-              <span className="gap-kind">Name left unexplained</span>
-              <span className="gap-question">Who owns Acme Construction Ltd?</span>
-              <span className="gap-quote">The story says: “the contract had been awarded to Acme Construction Ltd”</span>
-            </span>
-          </div>
-          <div className="example-angle">
-            <div className="pill-group">
-              <span className="tag tag-type">Who benefits</span>
-              <CoverageTag coverage="not_yet_reported" />
-            </div>
-            <h4 className="example-angle-title">Who is behind Acme?</h4>
-            <p className="angle-question">Who owns Acme Construction Ltd, and how did it win a ₦4.5 billion contract?</p>
-            <p className="angle-why">First steps: look up Acme on the CAC register, find the award notice on NOCOPO, then put both to the ministry in writing.</p>
-          </div>
-        </div>
       </section>
 
       <section aria-labelledby="honest-heading" className="landing-section">
