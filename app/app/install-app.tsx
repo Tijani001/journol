@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { SITE_HOST } from "@/lib/site";
 
 type Platform = "installed" | "ios" | "android" | "desktop";
 
@@ -69,7 +70,7 @@ export function InstallApp() {
         <>
           <h2>On iPhone or iPad</h2>
           <ol className="install-steps">
-            <li>Open <strong>journol.onrender.com</strong> in your browser (Safari, Chrome or another).</li>
+            <li>Open <strong>{SITE_HOST}</strong> in your browser (Safari, Chrome or another).</li>
             <li>Tap the <strong>Share</strong> button, the square with an arrow pointing up. It&apos;s at the bottom of the screen in Safari, and next to the address bar in Chrome.</li>
             <li>Tap <strong>Add to Home Screen</strong> (scroll down if you don&apos;t see it), then <strong>Add</strong>.</li>
           </ol>
@@ -80,7 +81,7 @@ export function InstallApp() {
         <>
           <h2>On Android</h2>
           <ol className="install-steps">
-            <li>Open <strong>journol.onrender.com</strong> in <strong>Chrome</strong>.</li>
+            <li>Open <strong>{SITE_HOST}</strong> in <strong>Chrome</strong>.</li>
             <li>Tap the <strong>⋮</strong> menu at the top right.</li>
             <li>Tap <strong>Install app</strong> (or <strong>Add to Home screen</strong>), then <strong>Install</strong>.</li>
           </ol>
@@ -91,7 +92,7 @@ export function InstallApp() {
         <>
           <h2>On a computer</h2>
           <ol className="install-steps">
-            <li>Open <strong>journol.onrender.com</strong> in <strong>Chrome</strong> or <strong>Edge</strong>.</li>
+            <li>Open <strong>{SITE_HOST}</strong> in <strong>Chrome</strong> or <strong>Edge</strong>.</li>
             <li>Click the <strong>install icon</strong> at the right end of the address bar (a screen with a down arrow).</li>
             <li>Click <strong>Install</strong>. On a Mac with Safari, choose <strong>File → Add to Dock</strong>.</li>
           </ol>
