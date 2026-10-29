@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { AngleFeedback } from "@/app/components/angle-feedback";
 import { CoverageTag } from "@/app/components/coverage-tag";
+import { PitchPanel } from "@/app/angle/[angleId]/pitch-panel";
 import { reportingBrief } from "@/lib/brief";
 import { ANGLE_TYPE_LABELS, type RelatedReport } from "@/lib/engine/types";
 import { plural, reportCredit } from "@/lib/format";
@@ -94,6 +95,7 @@ export function AngleView({ angle, verdict }: { angle: AngleWithStory; verdict: 
         <button type="button" className={saved ? "button button-saved" : "button button-primary"} aria-pressed={saved} onClick={toggleSave}>
           {saved ? "✓ Saved to My angles" : "Save this angle"}
         </button>
+        <a href="#pitch" className="button">Write a pitch</a>
         <button type="button" className="button" onClick={copyBrief}>{copied ? "✓ Brief copied" : "Copy reporting brief"}</button>
         {saved ? (
           <label className="small muted" style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
@@ -150,6 +152,7 @@ export function AngleView({ angle, verdict }: { angle: AngleWithStory; verdict: 
               ))}
             </div>
           </section>
+          <PitchPanel angleId={angle.id} initial={angle.pitch} />
         </div>
 
         <aside className="angle-aside">

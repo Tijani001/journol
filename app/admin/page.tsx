@@ -13,6 +13,7 @@ const FAILURE_LABELS: Record<string, string> = {
   angles: "No angles passed the checks",
   more_angles: "\"More angles\" failed",
   analysis: "Analysis crashed",
+  pitch: "Pitch couldn't be written",
 };
 
 function when(iso: string): string {

@@ -147,3 +147,15 @@ export function fakeModel(answers: Record<string, unknown | unknown[]>) {
 }
 
 export const PLAN = { key_names: ["Acme Construction Ltd", "Anka"], search_queries: ["Acme Construction Ltd clinics", "Zamfara clinics contract"] };
+
+/** A ~250-word pitch, as the model might return it. */
+export function rawPitch(overrides: { words?: number; extra?: string } = {}) {
+  const opening = "Dear [Editor's name], The Sentinel reported that the Federal Government will build 12 clinics in Zamfara mining communities for ₦4.5 billion, with Acme Construction Ltd as contractor. Daily Ledger [R2] found Acme left four of six clinics in Sokoto unfinished.";
+  const filler = "I will check the CAC register and the NOCOPO award notice and ask the ministry how Acme was chosen.";
+  const words = overrides.words ?? 250;
+  const parts = [opening, overrides.extra ?? ""];
+  let text = parts.join(" ").trim();
+  while (text.split(/\s+/).length < words) text += ` ${filler}`;
+  text = text.split(/\s+/).slice(0, words).join(" ");
+  return { working_title: "Who is behind the ₦4.5bn Zamfara clinics contractor?", pitch: `${text}\n\nBest regards,\n[Your name]` };
+}

@@ -19,7 +19,7 @@ export default function PrivacyPage() {
       <h2>What we collect</h2>
       <ul>
         <li><strong>Your account.</strong> Your name, email address and sign-in details, handled by our sign-in provider. We keep only an internal ID that links your work to you.</li>
-        <li><strong>What you give Journol.</strong> The links and story text you submit, and what Journol produces from them: summaries, open questions, angles and the related reports it found.</li>
+        <li><strong>What you give Journol.</strong> The links and story text you submit, and what Journol produces from them: summaries, open questions, angles, pitches and the related reports it found.</li>
         <li><strong>How you use it.</strong> The angles you save, their status and steps, your 👍/👎 ratings, and a count of how many stories you run each day (used for daily limits).</li>
         <li><strong>Technical records.</strong> When something fails, we record what kind of failure it was and the name of the website involved, not the story text. Our host keeps standard server logs.</li>
       </ul>

@@ -16,7 +16,9 @@ export function Landing() {
           <Link href="/sign-up" className="button button-primary button-large">Get started, it&apos;s free</Link>
           <Link href="/sign-in" className="button button-large">Sign in</Link>
         </div>
-        <p className="small muted" style={{ margin: 0 }}>Built for reporters and editors. Works on any published news story, from its link or its text.</p>
+        <p className="small muted" style={{ margin: 0 }}>
+          Built for reporters and editors. Works on any published news story, from its link or its text. <Link href="/app">Get the app</Link> for your phone or computer.
+        </p>
       </section>
 
       <section aria-labelledby="how-heading" className="landing-section">

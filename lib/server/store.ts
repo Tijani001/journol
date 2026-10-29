@@ -3,6 +3,7 @@ import "server-only";
 import type { PoolClient } from "pg";
 import { getDatabasePool } from "@/lib/server/database";
 import { isPastedUrl } from "@/lib/format";
+import type { Pitch } from "@/lib/engine/pitch";
 import type { Angle, RelatedReport, SearchStatus, StoryGap, StoryInput, StorySummary } from "@/lib/engine/types";
 
 /**
@@ -67,7 +68,7 @@ export async function usageSince(userId: string, since: Date): Promise<number> {
   return Number(result.rows[0].count);
 }
 
-export async function recordUsage(userId: string, kind: "analysis" | "angles"): Promise<string> {
+export async function recordUsage(userId: string, kind: "analysis" | "angles" | "pitch"): Promise<string> {
   const result = await getDatabasePool().query<{ id: string }>(
     "INSERT INTO usage_events (user_id, kind) VALUES ($1, $2) RETURNING id",
     [userId, kind],
@@ -249,12 +250,13 @@ export type AngleWithStory = StoredAngle & {
   related: RelatedReport[];
   relatedCount: number;
   searchStatus: SearchStatus;
+  pitch: Pitch | null;
 };
 
 export async function getAngle(userId: string, angleId: string): Promise<AngleWithStory | null> {
   if (!isUuid(angleId)) return null;
   const result = await getDatabasePool().query(
-    `SELECT g.id, g.analysis_id, g.round, g.position, g.content, g.saved_at, g.status, g.steps_done,
+    `SELECT g.id, g.analysis_id, g.round, g.position, g.content, g.saved_at, g.status, g.steps_done, g.pitch,
             an.gaps, an.related, an.search_status, ar.title, ar.publisher, ar.url
      FROM angles g JOIN analyses an ON an.id = g.analysis_id JOIN articles ar ON ar.id = an.article_id
      WHERE g.id = $1 AND g.user_id = $2`,
@@ -270,7 +272,36 @@ export async function getAngle(userId: string, angleId: string): Promise<AngleWi
     related,
     relatedCount: related.length,
     searchStatus: row.search_status,
+    pitch: row.pitch ?? null,
   };
+}
+
+/** Everything needed to write a pitch for one of the journalist's angles, including the story text. */
+export async function getPitchContext(userId: string, angleId: string) {
+  if (!isUuid(angleId)) return null;
+  const result = await getDatabasePool().query(
+    `SELECT g.content, an.gaps, an.related, ar.url, ar.title, ar.publisher, ar.published_at, ar.body
+     FROM angles g JOIN analyses an ON an.id = g.analysis_id JOIN articles ar ON ar.id = an.article_id
+     WHERE g.id = $1 AND g.user_id = $2`,
+    [angleId, userId],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  const story: StoryInput = {
+    url: row.url,
+    title: row.title,
+    publisher: row.publisher,
+    publishedAt: iso(row.published_at),
+    paragraphs: String(row.body).split("\n\n"),
+  };
+  return { story, angle: row.content as Angle, gaps: row.gaps as StoryGap[], related: row.related as RelatedReport[] };
+}
+
+/** Saves a new or edited pitch on one of the journalist's angles. */
+export async function setPitch(userId: string, angleId: string, pitch: Pitch): Promise<boolean> {
+  if (!isUuid(angleId)) return false;
+  const result = await getDatabasePool().query("UPDATE angles SET pitch = $3 WHERE id = $1 AND user_id = $2", [angleId, userId, JSON.stringify(pitch)]);
+  return Boolean(result.rowCount);
 }
 
 export async function updateAngle(

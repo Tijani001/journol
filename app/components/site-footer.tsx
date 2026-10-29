@@ -9,6 +9,7 @@ export function SiteFooter() {
           Journol suggests leads to check, not facts. Verify everything with your own reporting before you publish.
         </p>
         <nav aria-label="Footer" className="footer-links">
+          <Link href="/app">Get the app</Link>
           <Link href="/terms">Terms</Link>
           <Link href="/privacy">Privacy</Link>
           <Link href="/account">Your account</Link>

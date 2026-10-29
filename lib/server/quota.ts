@@ -29,7 +29,7 @@ export const GLOBAL_QUOTA_MESSAGE = "Journol is very busy today and has paused n
  * Claims one AI run. The use is recorded first and then counted, so parallel
  * requests can't slip past either limit together.
  */
-export async function claimRun(userId: string, kind: "analysis" | "angles"): Promise<Claim> {
+export async function claimRun(userId: string, kind: "analysis" | "angles" | "pitch"): Promise<Claim> {
   const usageId = await recordUsage(userId, kind);
   const since = new Date(Date.now() - 24 * 3_600_000);
   const [mine, everyone] = await Promise.all([usageSince(userId, since), totalUsageSince(since)]);

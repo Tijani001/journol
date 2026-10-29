@@ -9,7 +9,9 @@ Paste a link, or pick one of today's stories. Journol then:
 3. **Finds what the story leaves open.** These are numbered gaps, each tied to the story's own words or to a related report.
 4. **Suggests three angles to chase.** Each one says why it matters and gives three first steps, where to look, who to ask, and whether anyone has already reported it. "More angles" adds up to two more sets below.
 
-Journalists can save angles to **My angles**, tick off steps, and mark each angle as New, Reporting or Published. **My stories** lists every story they've run. If a link can't be read (a paywall, or a site that blocks automatic reading), they can paste the story text instead. Each angle has a 👍/👎 rating.
+Journalists can save angles to **My angles**, tick off steps, and mark each angle as New, Reporting or Published. **My stories** lists every story they've run. If a link can't be read (a paywall, or a site that blocks automatic reading), they can paste the story text instead. Each angle has a 👍/👎 rating, and **Write a pitch** turns it into a standard ~250-word story pitch to an editor (counts as one run; editable and copyable).
+
+Journol installs as an app (Android, iPhone, computers) from **`/app`**: a web app manifest, icons and a service worker that only caches an offline page, never journalists' work.
 
 Visitors who aren't signed in see a front page explaining what Journol does and how it works. Terms and a privacy policy (written for the Nigeria Data Protection Act 2023) are at `/terms` and `/privacy`, and journalists can delete their account and all their data at `/account`.
 
@@ -65,6 +67,8 @@ npm run build
 | `app/api/analyses` | Reads, searches and analyses a story, streaming progress |
 | `app/api/analyses/[id]/angles` | A different set of angles |
 | `app/api/angles/[id]` | Saving an angle, its status and its steps |
+| `app/api/angles/[id]/pitch` | Writing (POST) and editing (PUT) a pitch |
+| `app/app`, `app/manifest.ts`, `public/sw.js` | Installing Journol as an app |
 | `lib/engine` | The angle engine: prompts, related-coverage search and grounding checks |
 | `lib/server` | Article reader (SSRF-safe), database, sign-in and the daily allowance |
 | `db/migrations` | Database schema |

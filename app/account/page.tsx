@@ -27,7 +27,7 @@ export default async function AccountPage() {
 
       <section className="ruled">
         <h2>Today</h2>
-        <p>You&apos;ve used <strong>{usage.used} of {usage.limit}</strong> runs in the last 24 hours. Each new story and each &ldquo;More angles&rdquo; counts as one run.</p>
+        <p>You&apos;ve used <strong>{usage.used} of {usage.limit}</strong> runs in the last 24 hours. Each new story, each &ldquo;More angles&rdquo; and each pitch counts as one run.</p>
       </section>
 
       <section className="ruled">

@@ -4,12 +4,13 @@ import { POST as moreAngles } from "@/app/api/analyses/[analysisId]/angles/route
 import { PATCH as patchAngle } from "@/app/api/angles/[angleId]/route";
 import { PUT as rateAngle } from "@/app/api/angles/[angleId]/feedback/route";
 import { DELETE as deleteAccount } from "@/app/api/account/route";
+import { POST as writePitchRoute, PUT as editPitchRoute } from "@/app/api/angles/[angleId]/pitch/route";
 import { ArticleReadError } from "@/lib/server/article-reader";
 import { setIdentityForTesting } from "@/lib/server/auth";
 import { getDatabasePool } from "@/lib/server/database";
 import { setEngineServicesForTesting } from "@/lib/server/engine";
 import { feedbackFor, getAnalysis, getAngle, listAnalyses, listSavedAngles, ownerOverview, upsertUser } from "@/lib/server/store";
-import { PLAN, RAW_ANALYSIS, RAW_MORE_ANGLES, STORY, coverage, fakeModel, rawAngle } from "@/test/fixtures";
+import { PLAN, RAW_ANALYSIS, RAW_MORE_ANGLES, STORY, coverage, fakeModel, rawAngle, rawPitch } from "@/test/fixtures";
 
 /**
  * Route tests against a real PostgreSQL database. Set TEST_DATABASE_URL to an
@@ -229,5 +230,30 @@ suite("routes", () => {
     expect(done.status).toBe(200);
     const left = await getDatabasePool().query("SELECT (SELECT count(*) FROM analyses)::int AS a, (SELECT count(*) FROM angles)::int AS g, (SELECT count(*) FROM articles)::int AS r, (SELECT count(*) FROM users)::int AS u");
     expect(left.rows[0]).toEqual({ a: 0, g: 0, r: 0, u: 0 });
+  });
+
+  it("writes a pitch, saves edits, and keeps it private", async () => {
+    useEngine({ search_plan: PLAN, story_angles: RAW_ANALYSIS, more_angles: RAW_MORE_ANGLES, story_pitch: rawPitch() });
+    const [, , , { analysisId }] = await events(await analyseStory());
+    const alice = await upsertUser("test", "alice");
+    const angleId = (await getAnalysis(alice, analysisId))!.angles[0].id;
+    const params = { params: Promise.resolve({ angleId }) };
+
+    const written = await writePitchRoute(request(`/api/angles/${angleId}/pitch`, { method: "POST", body: JSON.stringify({ pitchingTo: "Premium Times" }) }), params);
+    expect(written.status).toBe(200);
+    const { pitch } = await written.json();
+    expect(pitch).toMatchObject({ title: expect.stringContaining("Zamfara"), edited: false });
+    expect((await getAngle(alice, angleId))?.pitch?.body).toBe(pitch.body);
+
+    const edited = await editPitchRoute(request(`/api/angles/${angleId}/pitch`, { method: "PUT", body: JSON.stringify({ title: "My title", body: "My own words." }) }), params);
+    expect(edited.status).toBe(200);
+    expect((await getAngle(alice, angleId))?.pitch).toMatchObject({ title: "My title", body: "My own words.", edited: true });
+
+    const runs = await getDatabasePool().query("SELECT count(*)::int AS n FROM usage_events WHERE kind = 'pitch'");
+    expect(runs.rows[0].n).toBe(1);
+
+    identity = { issuer: "test", subject: "bob" };
+    expect((await writePitchRoute(request(`/api/angles/${angleId}/pitch`, { method: "POST" }), params)).status).toBe(404);
+    expect((await editPitchRoute(request(`/api/angles/${angleId}/pitch`, { method: "PUT", body: JSON.stringify({ body: "x" }) }), params)).status).toBe(404);
   });
 });

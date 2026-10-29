@@ -1,7 +1,8 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { ClerkProvider } from "@clerk/nextjs";
 import { SiteFooter } from "@/app/components/site-footer";
+import { ServiceWorker } from "@/app/components/service-worker";
 import { SiteHeader } from "@/app/components/site-header";
 import { SITE_URL } from "@/lib/site";
 import { isClerkConfigured } from "@/lib/server/clerk-config";
@@ -15,6 +16,16 @@ export const metadata: Metadata = {
   description: DESCRIPTION,
   openGraph: { type: "website", siteName: "Journol", title: "Journol: find the question worth chasing", description: DESCRIPTION },
   twitter: { card: "summary_large_image", title: "Journol: find the question worth chasing", description: DESCRIPTION },
+  applicationName: "Journol",
+  appleWebApp: { capable: true, title: "Journol", statusBarStyle: "default" },
+  formatDetection: { telephone: false },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#5b5bc7",
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
@@ -31,6 +42,7 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
         <SiteHeader clerk={clerk} />
         {children}
         <SiteFooter />
+        <ServiceWorker />
       </body>
     </html>
   );

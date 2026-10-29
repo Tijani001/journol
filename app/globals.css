@@ -276,3 +276,14 @@ code { font-size: 12px; background: var(--purple-soft); padding: 2px 6px; border
 .angle-round { display: flex; flex-direction: column; gap: 12px; }
 .round-heading { font-size: 13px; font-weight: 700; color: var(--muted); margin-top: 12px; }
 .more-angles { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding-top: 8px; }
+
+/* Get the app */
+.install-card h2 { font-family: var(--heading); font-size: 20px; font-weight: 800; margin: 8px 0 8px; }
+.install-steps { margin: 0 0 8px; padding-left: 22px; display: flex; flex-direction: column; gap: 10px; font-size: 15px; line-height: 1.6; }
+.install-card .button-large { margin: 4px 0 20px; }
+
+/* Pitch */
+.pitch { scroll-margin-top: 16px; }
+.pitch-draft, .pitch-options { display: flex; flex-direction: column; gap: 14px; }
+.pitch-options { margin-top: 8px; }
+.pitch-body { min-height: 560px; font-size: 15px; line-height: 1.7; }
