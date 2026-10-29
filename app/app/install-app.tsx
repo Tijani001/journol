@@ -69,9 +69,9 @@ export function InstallApp() {
         <>
           <h2>On iPhone or iPad</h2>
           <ol className="install-steps">
-            <li>Open <strong>journol.onrender.com</strong> in <strong>Safari</strong>.</li>
-            <li>Tap the <strong>Share</strong> button (the square with an arrow pointing up) at the bottom of the screen.</li>
-            <li>Scroll down and tap <strong>Add to Home Screen</strong>, then <strong>Add</strong>.</li>
+            <li>Open <strong>journol.onrender.com</strong> in your browser (Safari, Chrome or another).</li>
+            <li>Tap the <strong>Share</strong> button, the square with an arrow pointing up. It&apos;s at the bottom of the screen in Safari, and next to the address bar in Chrome.</li>
+            <li>Tap <strong>Add to Home Screen</strong> (scroll down if you don&apos;t see it), then <strong>Add</strong>.</li>
           </ol>
         </>
       ) : null}
@@ -99,7 +99,7 @@ export function InstallApp() {
       ) : null}
 
       {platform !== "ios" ? (
-        <p className="small muted" style={{ marginTop: 16 }}>On an iPhone? Open this page in Safari and use Share → Add to Home Screen.</p>
+        <p className="small muted" style={{ marginTop: 16 }}>On an iPhone? Open this page in your browser and use Share → Add to Home Screen.</p>
       ) : (
         <p className="small muted" style={{ marginTop: 16 }}>On Android? Open this page in Chrome and tap Install.</p>
       )}
