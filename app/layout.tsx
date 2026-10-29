@@ -1,7 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { ClerkProvider } from "@clerk/nextjs";
+import { GuestBanner } from "@/app/components/guest-banner";
 import { SiteFooter } from "@/app/components/site-footer";
+import { isGuest } from "@/lib/server/auth";
 import { ServiceWorker } from "@/app/components/service-worker";
 import { SiteHeader } from "@/app/components/site-header";
 import { SITE_URL } from "@/lib/site";
@@ -28,8 +30,9 @@ export const viewport: Viewport = {
   viewportFit: "cover",
 };
 
-export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+export default async function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   const clerk = isClerkConfigured();
+  const guest = await isGuest().catch(() => false);
   const page = (
     <html lang="en">
       <head>
@@ -39,7 +42,8 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
         <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet" />
       </head>
       <body>
-        <SiteHeader clerk={clerk} />
+        <SiteHeader clerk={clerk} guest={guest} />
+        {guest ? <GuestBanner /> : null}
         {children}
         <SiteFooter />
         <ServiceWorker />

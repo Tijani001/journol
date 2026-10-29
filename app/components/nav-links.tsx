@@ -10,7 +10,7 @@ const APP_LINKS = [
   { href: "/angles", label: "My angles", match: (path: string) => path.startsWith("/angles") || path.startsWith("/angle/") },
 ];
 
-export function NavLinks({ clerk }: { clerk: boolean }) {
+export function NavLinks({ clerk, guest }: { clerk: boolean; guest: boolean }) {
   const pathname = usePathname();
   if (pathname.startsWith("/sign-in") || pathname.startsWith("/sign-up")) return null;
 
@@ -20,8 +20,8 @@ export function NavLinks({ clerk }: { clerk: boolean }) {
     </Link>
   ));
 
-  // Without Clerk (local development) the app links always show.
-  if (!clerk) return <nav aria-label="Main" className="site-nav">{appLinks}</nav>;
+  // Guests use the app without an account; without Clerk (local development) the app links always show.
+  if (!clerk || guest) return <nav aria-label="Main" className="site-nav">{appLinks}</nav>;
 
   return (
     <nav aria-label="Main" className="site-nav">

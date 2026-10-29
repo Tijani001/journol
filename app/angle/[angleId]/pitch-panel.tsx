@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRef, useState } from "react";
 import type { Pitch } from "@/lib/engine/pitch";
 
@@ -8,7 +9,7 @@ function countWords(text: string): number {
 }
 
 /** Writes, shows and lets the journalist edit a ~250-word pitch for this angle. */
-export function PitchPanel({ angleId, initial }: { angleId: string; initial: Pitch | null }) {
+export function PitchPanel({ angleId, initial, guest }: { angleId: string; initial: Pitch | null; guest: boolean }) {
   const [pitch, setPitch] = useState<Pitch | null>(initial);
   const [title, setTitle] = useState(initial?.title ?? "");
   const [body, setBody] = useState(initial?.body ?? "");
@@ -74,6 +75,23 @@ export function PitchPanel({ angleId, initial }: { angleId: string; initial: Pit
   }
 
   const words = countWords(body);
+
+  if (guest) {
+    return (
+      <section id="pitch" className="ruled pitch" aria-labelledby="pitch-heading">
+        <h2 id="pitch-heading">Pitch this story</h2>
+        <div className="account-prompt">
+          <p>
+            Turn this angle into a ready-to-send, 250-word pitch to an editor. Pitches come with a free account,
+            and everything you&apos;ve done as a guest moves into it.
+          </p>
+          <Link className="button button-primary" href={`/sign-up?redirect_url=${encodeURIComponent(`/angle/${angleId}#pitch`)}`}>
+            Create a free account to write pitches
+          </Link>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section id="pitch" className="ruled pitch" aria-labelledby="pitch-heading">

@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { HumanCheck } from "@/app/components/human-check";
 
 type Stage = "reading" | "searching" | "thinking";
 const STEPS: Array<{ stage: Stage; label: string; pastedLabel?: string }> = [
@@ -11,8 +12,12 @@ const STEPS: Array<{ stage: Stage; label: string; pastedLabel?: string }> = [
   { stage: "thinking", label: "Finding what's missing and the angles worth chasing" },
 ];
 
-type Request = { url: string } | { text: string; title: string; publisher: string; url: string };
-type Status = { kind: "idle" } | { kind: "working"; stage: Stage; pasted: boolean } | { kind: "error"; message: string; canPaste: boolean };
+type Request = ({ url: string } | { text: string; title: string; publisher: string; url: string }) & { humanToken?: string };
+type Status =
+  | { kind: "idle" }
+  | { kind: "working"; stage: Stage; pasted: boolean }
+  | { kind: "error"; message: string; canPaste: boolean }
+  | { kind: "check"; request: Request };
 
 /**
  * Sends a story to Journol and shows each stage as it happens. If the link
@@ -48,6 +53,10 @@ export function StoryReader({ url, startWithPaste }: { url: string; startWithPas
           return;
         }
         const body = await response.json().catch(() => null);
+        if (response.status === 403 && body?.needsHumanCheck) {
+          setStatus({ kind: "check", request });
+          return;
+        }
         setStatus({ kind: "error", message: body?.error ?? "Something went wrong. Please try again.", canPaste: false });
         return;
       }
@@ -89,6 +98,23 @@ export function StoryReader({ url, startWithPaste }: { url: string; startWithPas
     void run({ url });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once for the link in the address.
   }, [url, startWithPaste]);
+
+  const checked = useCallback((token: string) => {
+    if (status.kind === "check") void run({ ...status.request, humanToken: token });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- run is stable for this request.
+  }, [status]);
+
+  if (status.kind === "check") {
+    return (
+      <section className="progress" aria-live="polite">
+        <div>
+          <h1>Before we start</h1>
+          {url ? <p className="progress-url">{url}</p> : null}
+        </div>
+        <HumanCheck onToken={checked} />
+      </section>
+    );
+  }
 
   if (status.kind === "working") {
     const current = STEPS.findIndex((step) => step.stage === status.stage);

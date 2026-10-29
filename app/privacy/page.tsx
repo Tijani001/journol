@@ -25,6 +25,23 @@ export default function PrivacyPage() {
       </ul>
       <p>We don&apos;t use advertising trackers, and we don&apos;t sell your data.</p>
 
+      <h2>Using Journol as a guest</h2>
+      <p>
+        You can use Journol without an account. When you do, we set one cookie on your browser holding a random guest ID, signed so that
+        only Journol can create it. It links the stories you analyse to that browser and is strictly necessary for the service. We don&apos;t
+        know who you are; we don&apos;t collect your name or email.
+      </p>
+      <p>
+        To stop free stories being abused, we keep a one-way, scrambled code made from your internet connection&apos;s IP address with each
+        guest story. We can&apos;t turn that code back into your IP address, and we use it only to enforce daily limits. Before a new
+        guest&apos;s first story, Cloudflare Turnstile may check that you&apos;re a person; Cloudflare processes technical information about
+        your browser to do this.
+      </p>
+      <p>
+        Guest work is deleted 30 days after you first use Journol, unless you create an account. If you do, it moves into your account.
+        You can delete it yourself at any time on the account page.
+      </p>
+
       <h2>Why we use it</h2>
       <ul>
         <li><strong>To provide Journol to you</strong> (performing our agreement with you): reading stories, finding angles, and keeping your stories and angles in your account.</li>
@@ -39,6 +56,7 @@ export default function PrivacyPage() {
         <li><strong>OpenAI</strong> (reads the story and writes the summary, questions and angles), United States. Under OpenAI&apos;s API terms, data sent through its API is not used to train its models by default.</li>
         <li><strong>Tavily</strong> (web search for related coverage), which receives search queries built from the story, such as names and topics, not your account details.</li>
         <li><strong>Render</strong> (hosting and database), with servers in Frankfurt, Germany.</li>
+        <li><strong>Cloudflare</strong> (the check that a new guest is a person, and network delivery).</li>
       </ul>
       <p>
         Because these providers are outside Nigeria, your data is transferred abroad. We rely on the transfer bases the NDPA allows,

@@ -287,3 +287,12 @@ code { font-size: 12px; background: var(--purple-soft); padding: 2px 6px; border
 .pitch-draft, .pitch-options { display: flex; flex-direction: column; gap: 14px; }
 .pitch-options { margin-top: 8px; }
 .pitch-body { min-height: 560px; font-size: 15px; line-height: 1.7; }
+
+/* Guest mode */
+.guest-banner { background: var(--purple-soft); border-bottom: 1px solid #dfe3fb; }
+.guest-banner-inner { max-width: 1120px; margin: 0 auto; padding: 10px 24px; display: flex; gap: 6px 16px; flex-wrap: wrap; align-items: center; justify-content: space-between; font-size: 13px; color: var(--ink); }
+.guest-banner-cta { font-weight: 700; }
+.human-check { padding: 18px 0; border-top: 1px solid var(--line-strong); }
+.account-prompt { padding: 16px 18px; border-radius: 12px; background: var(--purple-soft); display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.account-prompt p { margin: 0; font-size: 15px; }
+@media (max-width: 640px) { .guest-banner-inner { padding: 10px 16px; } }

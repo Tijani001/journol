@@ -50,14 +50,55 @@ function iso(value: unknown): string | null {
 
 export { isPastedUrl };
 
-export async function upsertUser(issuer: string, subject: string): Promise<string> {
+export async function upsertUser(issuer: string, subject: string, isGuest = false): Promise<string> {
   const result = await getDatabasePool().query<{ id: string }>(
-    `INSERT INTO users (auth_issuer, auth_subject) VALUES ($1, $2)
+    `INSERT INTO users (auth_issuer, auth_subject, is_guest) VALUES ($1, $2, $3)
      ON CONFLICT (auth_issuer, auth_subject) DO UPDATE SET auth_issuer = EXCLUDED.auth_issuer
      RETURNING id`,
-    [issuer, subject],
+    [issuer, subject, isGuest],
   );
   return result.rows[0].id;
+}
+
+/**
+ * Moves everything a guest made into the journalist's account and removes
+ * the guest. Does nothing if that guest has already been merged or deleted.
+ */
+export async function mergeGuestInto(userId: string, guestIssuer: string, guestSubject: string): Promise<boolean> {
+  const client = await getDatabasePool().connect();
+  try {
+    await client.query("BEGIN");
+    const guest = await client.query<{ id: string }>(
+      "SELECT id FROM users WHERE auth_issuer = $1 AND auth_subject = $2 AND is_guest FOR UPDATE",
+      [guestIssuer, guestSubject],
+    );
+    const guestId = guest.rows[0]?.id;
+    if (!guestId || guestId === userId) {
+      await client.query("ROLLBACK");
+      return false;
+    }
+    for (const table of ["analyses", "angles", "angle_feedback"]) {
+      await client.query(`UPDATE ${table} SET user_id = $1 WHERE user_id = $2`, [userId, guestId]);
+    }
+    // Today's guest runs count toward the account's allowance too.
+    await client.query("UPDATE usage_events SET user_id = $1 WHERE user_id = $2", [userId, guestId]);
+    await client.query("UPDATE failures SET user_id = $1 WHERE user_id = $2", [userId, guestId]);
+    await client.query("DELETE FROM users WHERE id = $1", [guestId]);
+    await client.query("COMMIT");
+    return true;
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+/** Deletes guests nobody claimed within 30 days, and their work. */
+export async function deleteExpiredGuests(): Promise<void> {
+  await getDatabasePool()
+    .query("DELETE FROM users WHERE is_guest AND created_at < now() - interval '30 days'")
+    .catch(() => {});
 }
 
 export async function usageSince(userId: string, since: Date): Promise<number> {
@@ -68,12 +109,29 @@ export async function usageSince(userId: string, since: Date): Promise<number> {
   return Number(result.rows[0].count);
 }
 
-export async function recordUsage(userId: string, kind: "analysis" | "angles" | "pitch"): Promise<string> {
+export async function recordUsage(
+  userId: string,
+  kind: "analysis" | "angles" | "pitch",
+  guest: { ipHash: string | null } | null = null,
+): Promise<string> {
   const result = await getDatabasePool().query<{ id: string }>(
-    "INSERT INTO usage_events (user_id, kind) VALUES ($1, $2) RETURNING id",
-    [userId, kind],
+    "INSERT INTO usage_events (user_id, kind, guest, ip_hash) VALUES ($1, $2, $3, $4) RETURNING id",
+    [userId, kind, Boolean(guest), guest?.ipHash ?? null],
   );
   return String(result.rows[0].id);
+}
+
+/** How a guest's runs count: their own stories, their connection's, and all guests together. */
+export async function guestUsageSince(userId: string, ipHash: string | null, since: Date) {
+  const result = await getDatabasePool().query<{ mine: string; connection: string; guests: string }>(
+    `SELECT
+       (SELECT count(*) FROM usage_events WHERE user_id = $1 AND kind = 'analysis' AND created_at >= $3) AS mine,
+       (SELECT count(*) FROM usage_events WHERE $2::text IS NOT NULL AND ip_hash = $2 AND kind = 'analysis' AND created_at >= $3) AS connection,
+       (SELECT count(*) FROM usage_events WHERE guest AND created_at >= $3) AS guests`,
+    [userId, ipHash, since],
+  );
+  const row = result.rows[0];
+  return { mine: Number(row.mine), connection: Number(row.connection), guests: Number(row.guests) };
 }
 
 /** All AI runs across every journalist since the given time; used for the overall daily cap. */
@@ -479,6 +537,7 @@ export async function deleteUserData(userId: string): Promise<void> {
 
 export type OwnerOverview = {
   journalists: number;
+  guests: number;
   newJournalists7d: number;
   analyses24h: number;
   analyses7d: number;
@@ -496,8 +555,9 @@ export async function ownerOverview(): Promise<OwnerOverview> {
   const pool = getDatabasePool();
   const [counts, failures, failureCounts, feedback, outlets] = await Promise.all([
     pool.query(`SELECT
-      (SELECT count(*) FROM users) AS journalists,
-      (SELECT count(*) FROM users WHERE created_at > now() - interval '7 days') AS new7,
+      (SELECT count(*) FROM users WHERE NOT is_guest) AS journalists,
+      (SELECT count(*) FROM users WHERE NOT is_guest AND created_at > now() - interval '7 days') AS new7,
+      (SELECT count(*) FROM users WHERE is_guest) AS guests,
       (SELECT count(*) FROM analyses WHERE created_at > now() - interval '1 day') AS a24,
       (SELECT count(*) FROM analyses WHERE created_at > now() - interval '7 days') AS a7,
       (SELECT count(*) FROM usage_events WHERE created_at > now() - interval '1 day') AS r24,
@@ -514,6 +574,7 @@ export async function ownerOverview(): Promise<OwnerOverview> {
   const row = counts.rows[0];
   return {
     journalists: Number(row.journalists),
+    guests: Number(row.guests),
     newJournalists7d: Number(row.new7),
     analyses24h: Number(row.a24),
     analyses7d: Number(row.a7),

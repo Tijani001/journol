@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { LinkForm } from "@/app/components/link-form";
 
 /** What a visitor sees before signing in: what Journol does, how it works, and how it keeps itself honest. */
 export function Landing() {
@@ -12,12 +13,10 @@ export function Landing() {
           Paste a story that&apos;s already published. Journol reads it like an editor, checks what other outlets have
           reported, shows you what the story left out, and suggests follow-up angles you can actually report.
         </p>
-        <div className="toolbar">
-          <Link href="/sign-up" className="button button-primary button-large">Get started, it&apos;s free</Link>
-          <Link href="/sign-in" className="button button-large">Sign in</Link>
-        </div>
+        <LinkForm />
         <p className="small muted" style={{ margin: 0 }}>
-          Built for reporters and editors. Works on any published news story, from its link or its text. <Link href="/app">Get the app</Link> for your phone or computer.
+          <strong>Try it now, no account needed.</strong> <Link href="/sign-up">Create a free account</Link> to analyse more stories,
+          write pitches and keep your work on every device. Already have one? <Link href="/sign-in">Sign in</Link>.
         </p>
       </section>
 
@@ -51,7 +50,8 @@ export function Landing() {
           <li><strong>&ldquo;Not yet reported&rdquo; means it searched.</strong> The label only appears when Journol searched related coverage and found nobody asking.</li>
         </ul>
         <div className="toolbar" style={{ marginTop: 24 }}>
-          <Link href="/sign-up" className="button button-primary button-large">Find your first angle</Link>
+          <Link href="/sign-up" className="button button-primary button-large">Create a free account</Link>
+          <Link href="/app" className="button button-large">Get the app</Link>
         </div>
       </section>
     </main>

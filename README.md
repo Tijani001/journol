@@ -13,7 +13,9 @@ Journalists can save angles to **My angles**, tick off steps, and mark each angl
 
 Journol installs as an app (Android, iPhone, computers) from **`/app`**: a web app manifest, icons and a service worker that only caches an offline page, never journalists' work.
 
-Visitors who aren't signed in see a front page explaining what Journol does and how it works. Terms and a privacy policy (written for the Nigeria Data Protection Act 2023) are at `/terms` and `/privacy`, and journalists can delete their account and all their data at `/account`.
+**Guest mode:** anyone can paste a story on the front page and use Journol without an account: 3 new stories a day per guest (and 10 per internet connection), with guests together limited to half the overall cap. A guest is tied to one browser by a signed cookie, a Cloudflare Turnstile check runs before a new guest's first story (when its keys are set), and pitches need an account. If a guest signs up, their work moves into the account; unclaimed guests are deleted after 30 days.
+
+Visitors see a front page explaining what Journol does and how it works, with the link box ready to use. Terms and a privacy policy (written for the Nigeria Data Protection Act 2023) are at `/terms` and `/privacy`, and journalists can delete their account and all their data at `/account`.
 
 ## For the owner
 

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-export function DeleteAccount() {
+export function DeleteAccount({ guest }: { guest: boolean }) {
   const [open, setOpen] = useState(false);
   const [typed, setTyped] = useState("");
   const [state, setState] = useState<"idle" | "deleting" | "done" | "error">("idle");
@@ -19,7 +19,7 @@ export function DeleteAccount() {
         return;
       }
       setState("done");
-      setMessage(body.signInDeleted ? "Your account and all your Journol data have been deleted." : "Your Journol data has been deleted. Your sign-in account couldn't be removed automatically; contact us and we'll remove it.");
+      setMessage(guest ? "Your guest work has been deleted." : body.signInDeleted ? "Your account and all your Journol data have been deleted." : "Your Journol data has been deleted. Your sign-in account couldn't be removed automatically; contact us and we'll remove it.");
       // A full reload clears the signed-out session everywhere on the page.
       // eslint-disable-next-line @next/next/no-location-assign-relative-destination
       window.setTimeout(() => window.location.assign("/"), 2_500);
@@ -30,7 +30,7 @@ export function DeleteAccount() {
   }
 
   if (state === "done") return <p role="status"><strong>{message}</strong></p>;
-  if (!open) return <button type="button" className="button button-danger" onClick={() => setOpen(true)}>Delete my account…</button>;
+  if (!open) return <button type="button" className="button button-danger" onClick={() => setOpen(true)}>{guest ? "Delete my guest work…" : "Delete my account…"}</button>;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 420 }}>
       <label className="field">

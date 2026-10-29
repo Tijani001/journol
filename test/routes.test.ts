@@ -9,7 +9,9 @@ import { ArticleReadError } from "@/lib/server/article-reader";
 import { setIdentityForTesting } from "@/lib/server/auth";
 import { getDatabasePool } from "@/lib/server/database";
 import { setEngineServicesForTesting } from "@/lib/server/engine";
-import { feedbackFor, getAnalysis, getAngle, listAnalyses, listSavedAngles, ownerOverview, upsertUser } from "@/lib/server/store";
+import { feedbackFor, getAnalysis, getAngle, listAnalyses, listSavedAngles, mergeGuestInto, ownerOverview, upsertUser } from "@/lib/server/store";
+import { GUEST_COOKIE, verifyGuestToken } from "@/lib/server/guest";
+import { vi } from "vitest";
 import { PLAN, RAW_ANALYSIS, RAW_MORE_ANGLES, STORY, coverage, fakeModel, rawAngle, rawPitch } from "@/test/fixtures";
 
 /**
@@ -19,7 +21,7 @@ import { PLAN, RAW_ANALYSIS, RAW_MORE_ANGLES, STORY, coverage, fakeModel, rawAng
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const suite = databaseUrl ? describe : describe.skip;
 
-let identity: { issuer: string; subject: string } | null = { issuer: "test", subject: "alice" };
+let identity: { issuer: string; subject: string; guest?: boolean } | null = { issuer: "test", subject: "alice" };
 
 function request(url: string, init: RequestInit = {}) {
   return new Request(`http://localhost${url}`, init);
@@ -49,6 +51,10 @@ suite("routes", () => {
     identity = { issuer: "test", subject: "alice" };
     delete process.env.JOURNOL_DAILY_LIMIT;
     delete process.env.JOURNOL_GLOBAL_DAILY_LIMIT;
+    delete process.env.JOURNOL_GUEST_DAILY_LIMIT;
+    delete process.env.JOURNOL_GUEST_CONNECTION_LIMIT;
+    delete process.env.TURNSTILE_SECRET_KEY;
+    delete process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
     await getDatabasePool().query("TRUNCATE users, articles, analyses, angles, usage_events, angle_feedback, failures CASCADE");
   });
   afterEach(() => setEngineServicesForTesting(null));
@@ -58,9 +64,11 @@ suite("routes", () => {
     globalThis.__journolPostgresPool = undefined;
   });
 
-  it("asks a signed-out visitor to sign in", async () => {
+  it("asks a signed-out visitor to sign in when guest mode is off", async () => {
     identity = null;
+    process.env.JOURNOL_GUEST_MODE = "off";
     const response = await analyseStory();
+    delete process.env.JOURNOL_GUEST_MODE;
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({ ok: false, error: "Sign in to find angles." });
   });
@@ -255,5 +263,88 @@ suite("routes", () => {
     identity = { issuer: "test", subject: "bob" };
     expect((await writePitchRoute(request(`/api/angles/${angleId}/pitch`, { method: "POST" }), params)).status).toBe(404);
     expect((await editPitchRoute(request(`/api/angles/${angleId}/pitch`, { method: "PUT", body: JSON.stringify({ body: "x" }) }), params)).status).toBe(404);
+  });
+
+  async function startAsGuest(url = STORY.url, headers: Record<string, string> = {}) {
+    identity = null;
+    const response = await analyse(request("/api/analyses", { method: "POST", body: JSON.stringify({ url }), headers }));
+    const cookie = response.headers.get("set-cookie") ?? "";
+    const token = cookie.match(new RegExp(`${GUEST_COOKIE}=([^;]+)`))?.[1];
+    const subject = verifyGuestToken(token);
+    return { response, subject };
+  }
+
+  it("lets someone without an account start as a guest", async () => {
+    useEngine();
+    const { response, subject } = await startAsGuest();
+    expect(subject).toBeTruthy();
+    const streamed = await events(response);
+    const { analysisId } = streamed.at(-1);
+    const guestRow = await getDatabasePool().query("SELECT id, is_guest FROM users WHERE auth_issuer = 'journol-guest' AND auth_subject = $1", [subject]);
+    expect(guestRow.rows[0].is_guest).toBe(true);
+    expect(await getAnalysis(guestRow.rows[0].id, analysisId)).not.toBeNull();
+  });
+
+  it("gives guests their own smaller daily allowance", async () => {
+    process.env.JOURNOL_GUEST_DAILY_LIMIT = "1";
+    useEngine();
+    const { response, subject } = await startAsGuest();
+    await events(response);
+    identity = { issuer: "journol-guest", subject: subject!, guest: true };
+    const second = await analyseStory("https://sentinel.example/another-story");
+    expect(second.status).toBe(429);
+    expect((await second.json()).error).toContain("free stories as a guest");
+  });
+
+  it("limits guests per connection, so clearing cookies doesn't help", async () => {
+    process.env.JOURNOL_GUEST_CONNECTION_LIMIT = "1";
+    useEngine();
+    const first = await startAsGuest(STORY.url, { "cf-connecting-ip": "102.89.10.10" });
+    await events(first.response);
+    const fresh = await startAsGuest("https://sentinel.example/another-story", { "cf-connecting-ip": "102.89.10.10" });
+    expect(fresh.response.status).toBe(429);
+    const elsewhere = await startAsGuest("https://sentinel.example/third-story", { "cf-connecting-ip": "41.58.0.1" });
+    expect(elsewhere.response.status).toBe(200);
+  });
+
+  it("asks a new guest to pass the human check when it's switched on", async () => {
+    process.env.TURNSTILE_SECRET_KEY = "secret";
+    process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY = "site";
+    useEngine();
+    const blocked = await startAsGuest();
+    expect(blocked.response.status).toBe(403);
+    expect(await blocked.response.json()).toMatchObject({ needsHumanCheck: true });
+    expect(blocked.subject).toBeNull();
+
+    vi.stubGlobal("fetch", async () => Response.json({ success: true }));
+    identity = null;
+    const passed = await analyse(request("/api/analyses", { method: "POST", body: JSON.stringify({ url: STORY.url, humanToken: "ok" }) }));
+    vi.unstubAllGlobals();
+    expect(passed.status).toBe(200);
+    expect(passed.headers.get("set-cookie")).toContain(GUEST_COOKIE);
+  });
+
+  it("keeps pitches for accounts", async () => {
+    useEngine({ search_plan: PLAN, story_angles: RAW_ANALYSIS, more_angles: RAW_MORE_ANGLES, story_pitch: rawPitch() });
+    const { response, subject } = await startAsGuest();
+    const { analysisId } = (await events(response)).at(-1);
+    identity = { issuer: "journol-guest", subject: subject!, guest: true };
+    const guestId = await upsertUser("journol-guest", subject!, true);
+    const angleId = (await getAnalysis(guestId, analysisId))!.angles[0].id;
+    const blocked = await writePitchRoute(request(`/api/angles/${angleId}/pitch`, { method: "POST" }), { params: Promise.resolve({ angleId }) });
+    expect(blocked.status).toBe(403);
+    expect(await blocked.json()).toMatchObject({ needsAccount: true });
+  });
+
+  it("moves a guest's work into their account when they sign up", async () => {
+    useEngine();
+    const { response, subject } = await startAsGuest();
+    const { analysisId } = (await events(response)).at(-1);
+    const alice = await upsertUser("test", "alice");
+    expect(await mergeGuestInto(alice, "journol-guest", subject!)).toBe(true);
+    expect((await getAnalysis(alice, analysisId))?.angles.length).toBe(3);
+    const left = await getDatabasePool().query("SELECT count(*)::int AS n FROM users WHERE is_guest");
+    expect(left.rows[0].n).toBe(0);
+    expect(await mergeGuestInto(alice, "journol-guest", subject!)).toBe(false);
   });
 });

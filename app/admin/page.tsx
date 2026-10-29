@@ -39,7 +39,7 @@ export default async function AdminPage() {
       </div>
 
       <section className="stat-row">
-        <Stat label="Journalists" value={data.journalists} note={`${data.newJournalists7d} new this week`} />
+        <Stat label="Journalists" value={data.journalists} note={`${data.newJournalists7d} new this week · ${data.guests} guests`} />
         <Stat label="Stories, last 24 hours" value={data.analyses24h} note={`${data.analyses7d} this week`} />
         <Stat label="Runs vs daily cap" value={`${data.runs24h} / ${cap}`} note={data.runs24h >= cap * 0.8 ? "Close to the cap" : "Within the cap"} />
         <Stat label="Angles rated useful" value={rated ? `${Math.round((data.useful / rated) * 100)}%` : "–"} note={`${rated} ratings`} />

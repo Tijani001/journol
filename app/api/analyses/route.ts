@@ -4,11 +4,13 @@ import { cleanUrl } from "@/lib/engine/related";
 import { analyzeStory, type Stage } from "@/lib/engine/run";
 import { ENGINE_VERSION, type StoryInput } from "@/lib/engine/types";
 import { parsePastedStory } from "@/lib/pasted-story";
-import { currentUserId } from "@/lib/server/auth";
+import { currentUserId, signedInIdentity } from "@/lib/server/auth";
+import { GUEST_ISSUER, connectionHash, guestCookieHeader, guestModeEnabled, mintGuestToken } from "@/lib/server/guest";
+import { humanCheckEnabled, verifyHuman } from "@/lib/server/human-check";
 import { isDatabaseConfigured } from "@/lib/server/database";
 import { engineConfigured, engineServices } from "@/lib/server/engine";
 import { claimRun } from "@/lib/server/quota";
-import { findRecentAnalysis, isPastedUrl, recordFailure, saveAnalysis } from "@/lib/server/store";
+import { findRecentAnalysis, isPastedUrl, recordFailure, saveAnalysis, upsertUser } from "@/lib/server/store";
 
 export const maxDuration = 90;
 
@@ -24,17 +26,40 @@ const MAX_BODY_BYTES = 120_000;
 export async function POST(request: Request) {
   if (!isDatabaseConfigured()) return apiError("Journol's storage isn't set up yet.", 503);
 
-  let userId: string | null;
-  try {
-    userId = await currentUserId();
-  } catch {
-    return apiError("Journol couldn't reach its storage. Try again in a moment.", 503);
-  }
-  if (!userId) return apiError("Sign in to find angles.", 401);
-
   const parsed = await readJsonBody(request, MAX_BODY_BYTES);
   if ("error" in parsed) return parsed.error;
   const body = isRecord(parsed.value) ? parsed.value : {};
+
+  let userId: string | null;
+  let guest = false;
+  try {
+    userId = await currentUserId();
+    guest = Boolean(userId && (await signedInIdentity())?.guest);
+  } catch {
+    return apiError("Journol couldn't reach its storage. Try again in a moment.", 503);
+  }
+
+  // Someone without an account becomes a guest on their first story, after a quick check that they're a person.
+  let newGuestCookie: string | null = null;
+  if (!userId) {
+    if (!guestModeEnabled()) return apiError("Sign in to find angles.", 401);
+    const token = typeof body.humanToken === "string" ? body.humanToken : null;
+    if (humanCheckEnabled() && !(await verifyHuman(token))) {
+      return Response.json(
+        { ok: false, needsHumanCheck: true, error: "Please confirm you're a person to continue." },
+        { status: 403, headers: { "Cache-Control": "no-store" } },
+      );
+    }
+    const minted = mintGuestToken();
+    if (!minted) return apiError("Sign in to find angles.", 401);
+    try {
+      userId = await upsertUser(GUEST_ISSUER, minted.id, true);
+    } catch {
+      return apiError("Journol couldn't reach its storage. Try again in a moment.", 503);
+    }
+    guest = true;
+    newGuestCookie = guestCookieHeader(minted.token);
+  }
   const text = typeof body.text === "string" ? body.text : "";
   const rawUrl = typeof body.url === "string" ? body.url.trim().slice(0, 2_000) : "";
 
@@ -61,13 +86,13 @@ export async function POST(request: Request) {
   try {
     // A link analysed recently is reused. Pasted text is analysed again, since the text may have changed.
     const existing = pasted ? null : await findRecentAnalysis(userId, url);
-    if (existing) return streamOf([{ analysisId: existing }]);
+    if (existing) return streamOf([{ analysisId: existing }], newGuestCookie);
     if (!engineConfigured()) return apiError("Journol's AI isn't set up yet.", 503);
-    claim = await claimRun(userId, "analysis");
+    claim = await claimRun(userId, "analysis", guest ? { ipHash: connectionHash(request) } : null);
   } catch {
     return apiError("Journol couldn't reach its storage. Try again in a moment.", 503);
   }
-  if (!claim.ok) return apiError(claim.message, 429);
+  if (!claim.ok) return apiError(claim.message, 429, newGuestCookie ? { "Set-Cookie": newGuestCookie } : undefined);
 
   const run = claim;
   const owner = userId;
@@ -126,20 +151,21 @@ export async function POST(request: Request) {
       }
     },
   });
-  return streamResponse(stream);
+  return streamResponse(stream, newGuestCookie);
 }
 
-function streamResponse(stream: ReadableStream<Uint8Array>) {
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "application/x-ndjson; charset=utf-8",
-      "Cache-Control": "no-store",
-      "X-Accel-Buffering": "no",
-    },
+function streamResponse(stream: ReadableStream<Uint8Array>, setCookie: string | null = null) {
+  const headers = new Headers({
+    "Content-Type": "application/x-ndjson; charset=utf-8",
+    "Cache-Control": "no-store",
+    "X-Accel-Buffering": "no",
   });
+  // A new guest's cookie goes out with the first response, before the stream starts.
+  if (setCookie) headers.append("Set-Cookie", setCookie);
+  return new Response(stream, { headers });
 }
 
-function streamOf(events: AnalysisEvent[]) {
+function streamOf(events: AnalysisEvent[], setCookie: string | null = null) {
   const body = events.map((event) => `${JSON.stringify(event)}\n`).join("");
-  return streamResponse(new Response(body).body as ReadableStream<Uint8Array>);
+  return streamResponse(new Response(body).body as ReadableStream<Uint8Array>, setCookie);
 }

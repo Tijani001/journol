@@ -28,8 +28,12 @@ export default function TermsPage() {
         Verify everything independently before you publish or act on it. You are responsible for what you publish.
       </p>
 
-      <h2>Your account</h2>
-      <p>You need an account to use Journol. Keep your sign-in details safe, and tell us if you think someone else has used your account. You must be at least 18.</p>
+      <h2>Guests and accounts</h2>
+      <p>
+        You can use Journol as a guest, with a smaller daily allowance, without creating an account. Guest work stays on the browser you
+        used and is deleted after 30 days unless you create an account. These terms apply to guests too.
+      </p>
+      <p>Some features, such as writing pitches, need a free account. Keep your sign-in details safe, and tell us if you think someone else has used your account. You must be at least 18.</p>
 
       <h2>Acceptable use</h2>
       <p>You agree not to use Journol to:</p>

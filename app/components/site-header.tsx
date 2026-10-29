@@ -10,14 +10,14 @@ export function BrandMark() {
   );
 }
 
-export function SiteHeader({ clerk }: { clerk: boolean }) {
+export function SiteHeader({ clerk, guest }: { clerk: boolean; guest: boolean }) {
   return (
     <header className="site-header">
       <div className="site-header-inner">
         <Link href="/" aria-label="Journol home" className="brand">
           <BrandMark />
         </Link>
-        <NavLinks clerk={clerk} />
+        <NavLinks clerk={clerk} guest={guest} />
       </div>
     </header>
   );

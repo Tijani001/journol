@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { apiError, isRecord, readJsonBody } from "@/lib/api";
 import { PitchError, writePitch, type Pitch } from "@/lib/engine/pitch";
-import { currentUserId } from "@/lib/server/auth";
+import { currentUserId, signedInIdentity } from "@/lib/server/auth";
 import { isDatabaseConfigured } from "@/lib/server/database";
 import { engineConfigured, engineServices } from "@/lib/server/engine";
 import { claimRun } from "@/lib/server/quota";
@@ -33,6 +33,12 @@ export async function POST(request: Request, context: Context) {
     return apiError("Journol couldn't reach its storage. Try again in a moment.", 503);
   }
   if (!userId) return apiError("Sign in to write a pitch.", 401);
+  if ((await signedInIdentity().catch(() => null))?.guest) {
+    return Response.json(
+      { ok: false, needsAccount: true, error: "Create a free account to write pitches." },
+      { status: 403, headers: { "Cache-Control": "no-store" } },
+    );
+  }
 
   const material = await getPitchContext(userId, angleId).catch(() => undefined);
   if (material === undefined) return apiError("Journol couldn't reach its storage. Try again in a moment.", 503);

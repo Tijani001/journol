@@ -3,6 +3,7 @@ import { clerkClient } from "@clerk/nextjs/server";
 import { apiError, isRecord, readJsonBody } from "@/lib/api";
 import { currentUserId, signedInIdentity } from "@/lib/server/auth";
 import { isClerkConfigured } from "@/lib/server/clerk-config";
+import { GUEST_ISSUER, clearGuestCookieHeader } from "@/lib/server/guest";
 import { deleteUserData } from "@/lib/server/store";
 
 /**
@@ -18,6 +19,9 @@ export async function DELETE(request: Request) {
     const [userId, identity] = await Promise.all([currentUserId(), signedInIdentity()]);
     if (!userId || !identity) return apiError("Sign in to delete your account.", 401);
     await deleteUserData(userId);
+    if (identity.issuer === GUEST_ISSUER) {
+      return NextResponse.json({ ok: true, signInDeleted: true }, { headers: { "Cache-Control": "no-store", "Set-Cookie": clearGuestCookieHeader() } });
+    }
     if (isClerkConfigured() && identity.issuer !== "journol-development") {
       try {
         const client = await clerkClient();

@@ -12,7 +12,7 @@ import type { AngleStatus, AngleWithStory } from "@/lib/server/store";
 
 const STATUS_LABELS: Record<AngleStatus, string> = { new: "New", reporting: "Reporting", published: "Published" };
 
-export function AngleView({ angle, verdict }: { angle: AngleWithStory; verdict: "useful" | "not_useful" | null }) {
+export function AngleView({ angle, verdict, guest }: { angle: AngleWithStory; verdict: "useful" | "not_useful" | null; guest: boolean }) {
   const [saved, setSaved] = useState(Boolean(angle.savedAt));
   const [status, setStatus] = useState<AngleStatus>(angle.status);
   const [stepsDone, setStepsDone] = useState<boolean[]>(angle.stepsDone);
@@ -152,7 +152,7 @@ export function AngleView({ angle, verdict }: { angle: AngleWithStory; verdict: 
               ))}
             </div>
           </section>
-          <PitchPanel angleId={angle.id} initial={angle.pitch} />
+          <PitchPanel angleId={angle.id} initial={angle.pitch} guest={guest} />
         </div>
 
         <aside className="angle-aside">
