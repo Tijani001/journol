@@ -165,9 +165,9 @@ suite("routes", () => {
 
   it("doesn't count a story it couldn't read against the limit", async () => {
     process.env.JOURNOL_DAILY_LIMIT = "1";
-    useEngine(undefined, async () => { throw new ArticleReadError("BLOCKED", "The website didn't let Journol read this story. Try another link."); });
+    useEngine(undefined, async () => { throw new ArticleReadError("BLOCKED", "The website didn't let Journol read this page. Try another link, or paste the story text."); });
     const streamed = await events(await analyseStory());
-    expect(streamed).toEqual([{ stage: "reading" }, { error: "The website didn't let Journol read this story. Try another link.", canPaste: true }]);
+    expect(streamed).toEqual([{ stage: "reading" }, { error: "The website didn't let Journol read this page. Try another link, or paste the story text.", canPaste: true }]);
     useEngine();
     const ok = await events(await analyseStory());
     expect(ok.at(-1)).toHaveProperty("analysisId");
@@ -197,7 +197,7 @@ suite("routes", () => {
   });
 
   it("offers to paste the text when a link can't be read, and records the failure", async () => {
-    useEngine(undefined, async () => { throw new ArticleReadError("BLOCKED", "The website didn't let Journol read this story. Try another link."); });
+    useEngine(undefined, async () => { throw new ArticleReadError("BLOCKED", "The website didn't let Journol read this page. Try another link, or paste the story text."); });
     const streamed = await events(await analyseStory("https://www.punchng.com/blocked-story"));
     expect(streamed.at(-1)).toMatchObject({ canPaste: true });
     const overview = await ownerOverview();

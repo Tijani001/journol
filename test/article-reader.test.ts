@@ -24,6 +24,31 @@ describe("article reader", () => {
     expect(() => extractStory(page("<p>Short.</p>"), "https://sentinel.example/x")).toThrow(ArticleReadError);
   });
 
+  describe("when a page can't be used as a story", () => {
+    const codeOf = (html: string) => {
+      try {
+        extractStory(html, "https://example.test/page");
+      } catch (error) {
+        return error instanceof ArticleReadError ? error.code : "OTHER";
+      }
+      return null;
+    };
+
+    it("says it is not a story when the page never declared itself one", () => {
+      const form = `<!doctype html><html><head><title>How to apply</title></head><body><main><h1>How to apply</h1><p>Applications open in March.</p></main></body></html>`;
+      expect(codeOf(form)).toBe("NOT_A_STORY");
+    });
+
+    it("keeps the too-short message for a page declared as an article", () => {
+      expect(codeOf(page("<p>Short.</p>"))).toBe("TOO_SHORT");
+    });
+
+    it("treats schema.org article markup as a story", () => {
+      const withSchema = `<!doctype html><html><head><title>Clinic</title><script type="application/ld+json">{"@context":"https://schema.org","@type":"NewsArticle"}</script></head><body><main><h1>Clinic</h1><p>Short.</p></main></body></html>`;
+      expect(codeOf(withSchema)).toBe("TOO_SHORT");
+    });
+  });
+
   it("refuses private and local addresses before connecting", async () => {
     await expect(fetchHtml("http://127.0.0.1/admin")).rejects.toMatchObject({ code: "ARTICLE_ADDRESS_NOT_ALLOWED" });
     await expect(fetchHtml("http://localhost:3000/")).rejects.toBeInstanceOf(ArticleReadError);

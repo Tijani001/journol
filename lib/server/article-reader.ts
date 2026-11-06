@@ -40,8 +40,9 @@ const MESSAGES: Record<string, string> = {
   TOO_MANY_REDIRECTS: "That link redirects too many times to be read.",
   NOT_HTML: "That link isn't a web page with a story on it.",
   TOO_LARGE: "That page is too large to read.",
-  BLOCKED: "The website didn't let Journol read this story. Try another link.",
+  BLOCKED: "The website didn't let Journol read this page. Try another link, or paste the story text.",
   NO_TEXT: "Journol couldn't find the story text on that page. It may be behind a paywall or not an article.",
+  NOT_A_STORY: "This page doesn't look like a published news story, so Journol can't find angles in it. Try the link to a story, or paste its text.",
   TOO_SHORT: "There isn't enough story text on that page to find angles in.",
 };
 
@@ -171,16 +172,48 @@ export function paragraphsFromHtml(contentHtml: string): string[] {
   }
 }
 
+// Matches schema.org Article, NewsArticle, ReportageNewsArticle, BlogPosting, and similar.
+const ARTICLE_TYPE = /(article|blogposting)$/i;
+
+/**
+ * True when the page declares itself a published article: an article og:type,
+ * a publish date, or schema.org Article markup. Used to tell a news story that
+ * couldn't be read apart from an ordinary page (an application form, a
+ * programme page) that was never a story.
+ */
+function hasStorySignals(document: Document): boolean {
+  if (metaContent(document, ['meta[property="og:type"]'])?.toLowerCase() === "article") return true;
+  if (publishedAt(document)) return true;
+  for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+    let data: unknown;
+    try {
+      data = JSON.parse(script.textContent ?? "");
+    } catch {
+      continue;
+    }
+    const items = Array.isArray(data) ? data : [data];
+    for (const item of items) {
+      const type = (item as { "@type"?: unknown } | null)?.["@type"];
+      const types = Array.isArray(type) ? type : [type];
+      if (types.some((value) => typeof value === "string" && ARTICLE_TYPE.test(value))) return true;
+    }
+  }
+  return false;
+}
+
 export function extractStory(html: string, url: string): StoryInput {
   const dom = new JSDOM(html, { url });
   try {
     const document = dom.window.document;
+    // Read before Readability, which edits the document (it removes scripts).
+    const declaresStory = hasStorySignals(document);
     const date = publishedAt(document);
     const publisher = publisherName(document, url);
     const headline = (document.querySelector("h1")?.textContent ?? "").replace(/\s+/g, " ").trim();
     const ogTitle = metaContent(document, ['meta[property="og:title"]'])?.replace(/\s+[|–—-]\s+[^|–—-]{2,40}$/, "") ?? "";
     const article = new Readability(document).parse();
-    if (!article?.content) fail("NO_TEXT");
+    // A page with no usable text is only "not a story" when it never declared itself one.
+    if (!article?.content) fail(declaresStory ? "NO_TEXT" : "NOT_A_STORY");
     let paragraphs = paragraphsFromHtml(article.content);
     if (paragraphs.join(" ").length < 400 && article.textContent) {
       // Some sites use <div>s instead of <p>s; fall back to Readability's plain text.
@@ -192,8 +225,8 @@ export function extractStory(html: string, url: string): StoryInput {
     const repeats = new Set([comparable(title), comparable(headline)]);
     paragraphs = paragraphs.filter((paragraph) => !repeats.has(comparable(paragraph)));
     const length = paragraphs.join(" ").length;
-    if (length === 0) fail("NO_TEXT");
-    if (length < 400) fail("TOO_SHORT");
+    if (length === 0) fail(declaresStory ? "NO_TEXT" : "NOT_A_STORY");
+    if (length < 400) fail(declaresStory ? "TOO_SHORT" : "NOT_A_STORY");
     return { url, title, publisher, publishedAt: date, paragraphs };
   } finally {
     dom.window.close();
