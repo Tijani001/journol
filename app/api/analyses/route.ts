@@ -11,6 +11,7 @@ import { isDatabaseConfigured } from "@/lib/server/database";
 import { engineConfigured, engineServices } from "@/lib/server/engine";
 import { claimRun } from "@/lib/server/quota";
 import { findRecentAnalysis, isPastedUrl, recordFailure, saveAnalysis, upsertUser } from "@/lib/server/store";
+import { PROVIDER_UNAVAILABLE_MESSAGE, alertProviderUnavailable, isProviderUnavailable } from "@/lib/server/provider-errors";
 
 export const maxDuration = 90;
 
@@ -142,6 +143,14 @@ export async function POST(request: Request) {
         });
         send({ analysisId });
       } catch (error) {
+        if (isProviderUnavailable(error)) {
+          // The story is fine; the AI provider isn't. Give the reader their story back and tell us.
+          await run.refund();
+          await alertProviderUnavailable(error);
+          await recordFailure({ userId: owner, kind: "analysis", code: "PROVIDER_UNAVAILABLE", url: link });
+          send({ error: PROVIDER_UNAVAILABLE_MESSAGE });
+          return;
+        }
         const code = error instanceof Error ? error.message.slice(0, 80) : "UNKNOWN";
         console.error("Journol analysis failed:", code);
         await recordFailure({ userId: owner, kind: "analysis", code, url: link });

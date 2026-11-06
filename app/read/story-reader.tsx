@@ -26,7 +26,6 @@ type Status =
 export function StoryReader({ url, startWithPaste }: { url: string; startWithPaste: boolean }) {
   const router = useRouter();
   const [status, setStatus] = useState<Status>(startWithPaste ? { kind: "idle" } : { kind: "working", stage: "reading", pasted: false });
-  const [showPaste, setShowPaste] = useState(startWithPaste);
   const [activeUrl, setActiveUrl] = useState(url);
   const started = useRef(false);
   const mounted = useRef(true);
@@ -76,7 +75,6 @@ export function StoryReader({ url, startWithPaste }: { url: string; startWithPas
           if (event.stage) setStatus({ kind: "working", stage: event.stage, pasted });
           if (event.error) {
             setStatus({ kind: "error", message: event.error, canPaste: Boolean(event.canPaste) });
-            if (event.canPaste) setShowPaste(true);
             return;
           }
           if (event.analysisId) {
@@ -164,9 +162,15 @@ export function StoryReader({ url, startWithPaste }: { url: string; startWithPas
         </div>
       )}
 
-      {showPaste ? (
+      {status.kind === "error" && !status.canPaste ? (
+        // Not a problem with the link (for example, the AI service is down), so a new link won't help.
+        <div className="toolbar">
+          <button type="button" className="button button-primary" onClick={() => activeUrl && void run({ url: activeUrl })}>Try again</button>
+          <Link className="button" href="/">Try another story</Link>
+        </div>
+      ) : (
         <>
-          {status.kind === "error" && status.canPaste ? (
+          {status.kind === "error" ? (
             <LinkRetryForm
               onSubmit={(next) => {
                 setActiveUrl(next);
@@ -176,12 +180,6 @@ export function StoryReader({ url, startWithPaste }: { url: string; startWithPas
           ) : null}
           <PasteForm url={activeUrl} onSubmit={(request) => void run(request)} />
         </>
-      ) : (
-        <div className="toolbar">
-          <button type="button" className="button button-primary" onClick={() => activeUrl && void run({ url: activeUrl })}>Try again</button>
-          <button type="button" className="button" onClick={() => setShowPaste(true)}>Paste the text instead</button>
-          <Link className="button" href="/">Try another story</Link>
-        </div>
       )}
     </section>
   );
