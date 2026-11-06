@@ -27,6 +27,7 @@ export function StoryReader({ url, startWithPaste }: { url: string; startWithPas
   const router = useRouter();
   const [status, setStatus] = useState<Status>(startWithPaste ? { kind: "idle" } : { kind: "working", stage: "reading", pasted: false });
   const [showPaste, setShowPaste] = useState(startWithPaste);
+  const [activeUrl, setActiveUrl] = useState(url);
   const started = useRef(false);
   const mounted = useRef(true);
 
@@ -122,7 +123,7 @@ export function StoryReader({ url, startWithPaste }: { url: string; startWithPas
       <section className="progress" aria-live="polite">
         <div>
           <h1>Finding angles…</h1>
-          {url && !status.pasted ? <p className="progress-url">{url}</p> : null}
+          {activeUrl && !status.pasted ? <p className="progress-url">{activeUrl}</p> : null}
         </div>
         <ol className="progress-steps">
           {STEPS.map((step, index) => {
@@ -146,11 +147,11 @@ export function StoryReader({ url, startWithPaste }: { url: string; startWithPas
       {status.kind === "error" ? (
         <div>
           <h1>{status.canPaste ? "Journol couldn't read that link" : "Journol couldn't finish"}</h1>
-          {url ? <p className="progress-url">{url}</p> : null}
+          {activeUrl ? <p className="progress-url">{activeUrl}</p> : null}
           <p className="form-error" role="alert" style={{ marginTop: 12 }}>{status.message}</p>
           {status.canPaste ? (
             <p className="muted" style={{ margin: "8px 0 0" }}>
-              Some websites block automatic reading or sit behind a paywall. Paste the story text below and Journol will work from that.
+              Some websites block automatic reading or sit behind a paywall. Try a different link below, or paste the story text.
             </p>
           ) : null}
         </div>
@@ -164,15 +165,60 @@ export function StoryReader({ url, startWithPaste }: { url: string; startWithPas
       )}
 
       {showPaste ? (
-        <PasteForm url={url} onSubmit={(request) => void run(request)} />
+        <>
+          {status.kind === "error" && status.canPaste ? (
+            <LinkRetryForm
+              onSubmit={(next) => {
+                setActiveUrl(next);
+                void run({ url: next });
+              }}
+            />
+          ) : null}
+          <PasteForm url={activeUrl} onSubmit={(request) => void run(request)} />
+        </>
       ) : (
         <div className="toolbar">
-          <button type="button" className="button button-primary" onClick={() => url && void run({ url })}>Try again</button>
+          <button type="button" className="button button-primary" onClick={() => activeUrl && void run({ url: activeUrl })}>Try again</button>
           <button type="button" className="button" onClick={() => setShowPaste(true)}>Paste the text instead</button>
           <Link className="button" href="/">Try another story</Link>
         </div>
       )}
     </section>
+  );
+}
+
+function LinkRetryForm({ onSubmit }: { onSubmit: (url: string) => void }) {
+  const [link, setLink] = useState("");
+  const [error, setError] = useState("");
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    let parsed: URL;
+    try {
+      parsed = new URL(link.trim());
+    } catch {
+      setError("Enter a full link, starting with https://");
+      return;
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      setError("Enter a web link, starting with https://");
+      return;
+    }
+    setError("");
+    onSubmit(parsed.toString());
+  }
+
+  return (
+    <form className="paste-form" onSubmit={submit} noValidate>
+      <label className="field">
+        <span>Try a different link</span>
+        <input className="text-input" type="url" inputMode="url" value={link} onChange={(event) => setLink(event.target.value)} placeholder="https://…" />
+      </label>
+      {error ? <p className="form-error" role="alert">{error}</p> : null}
+      <div className="toolbar">
+        <button type="submit" className="button button-primary">Try this link</button>
+      </div>
+    </form>
   );
 }
 
